@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+target/
+.turbo/
+.vite/
+*.log
+*.md
+spec/
+misc/
+offtop/

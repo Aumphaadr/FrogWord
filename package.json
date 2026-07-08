@@ -1,0 +1,22 @@
+{
+  "name": "frogword",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "dev:desktop": "npm run dev --workspace @frogword/desktop",
+    "test": "npm run test --workspaces --if-present",
+    "theme-bank:preview": "npm run build --workspace @frogword/core && node scripts/theme-bank-to-starter-pack.mjs",
+    "tauri:dev": "npm run tauri:dev --workspace @frogword/desktop",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "vitest": "^4.1.10"
+  }
+}
