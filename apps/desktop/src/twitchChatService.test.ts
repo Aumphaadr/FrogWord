@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  createAnonymousTwitchChatClient,
   createTwitchChatClient,
   normalizeTwitchChannel,
   parseTwitchIrcLine,
@@ -150,6 +151,39 @@ describe('twitch chat service', () => {
       text: '!играть',
     });
     expect(statuses).toEqual(['connecting', 'connected']);
+  });
+
+  it('connects anonymously without OAuth for read-only public chat', () => {
+    FakeWebSocket.instances = [];
+    const messages: TwitchChatMessage[] = [];
+    const client = createAnonymousTwitchChatClient({
+      channel: 'frogword',
+      login: 'justinfan12345',
+      WebSocketCtor: FakeWebSocket as unknown as TwitchWebSocketConstructor,
+      onMessage: (message) => messages.push(message),
+    });
+
+    client.connect();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.emitOpen();
+
+    expect(socket.sent).toEqual([
+      'CAP REQ :twitch.tv/tags twitch.tv/commands',
+      'NICK justinfan12345',
+      'JOIN #frogword',
+    ]);
+    expect(socket.sent.some((line) => line.startsWith('PASS '))).toBe(false);
+
+    socket.emitMessage(
+      '@display-name=Viewer;user-id=7 :viewer!viewer@viewer.tmi.twitch.tv PRIVMSG #frogword :!играть\r\n',
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      channel: 'frogword',
+      displayName: 'Viewer',
+      text: '!играть',
+    });
   });
 
   it('reconnects after unexpected close and stops reconnecting after manual disconnect', () => {

@@ -9,3 +9,5 @@ target/
 spec/
 misc/
 offtop/
+*.code-workspace
+!README.md

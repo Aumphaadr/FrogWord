@@ -324,7 +324,11 @@ function acceptWord(
   const rng = createRng(`${state.rngState}:accept:${state.foundWords.length}`);
   const points = scoreWord(word);
   const path = [...player.path];
-  const refilled = refillPathCells(state.board, path, state.theme, rng);
+  // The player stays where the word ended; the cell under the frog is kept
+  // empty so the fresh letters land only on vacated path cells.
+  const refilled = refillPathCells(state.board, path, state.theme, rng, {
+    keepEmpty: player.position ? [player.position] : [],
+  });
   state.rngState = rng.state();
 
   player.score += points;
@@ -332,7 +336,6 @@ function acceptWord(
   player.buffer = '';
   player.path = [];
   player.collectedLetterCellIds = [];
-  setRespawnPosition(state, player);
 
   state.foundWords.push({
     id: `${state.id}:found:${state.foundWords.length + 1}`,

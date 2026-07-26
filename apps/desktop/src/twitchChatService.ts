@@ -38,6 +38,16 @@ export interface TwitchChatClientOptions {
   timers?: TwitchChatTimers;
 }
 
+export interface AnonymousTwitchChatClientOptions {
+  channel: string;
+  onMessage: (message: TwitchChatMessage) => void;
+  onStatus?: (event: TwitchChatStatusEvent) => void;
+  reconnect?: TwitchChatReconnectOptions;
+  WebSocketCtor?: TwitchWebSocketConstructor;
+  timers?: TwitchChatTimers;
+  login?: string;
+}
+
 export interface TwitchChatReconnectOptions {
   enabled?: boolean;
   delaysMs?: readonly number[];
@@ -71,11 +81,6 @@ const TWITCH_CHANNEL_PATTERN = /^[a-z0-9_]{3,25}$/;
 const DEFAULT_RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000, 30000] as const;
 
 export function createTwitchChatClient(options: TwitchChatClientOptions): TwitchChatClient {
-  const channel = normalizeTwitchChannel(options.channel);
-  if (!channel) {
-    throw new Error('Twitch channel login is required');
-  }
-
   const login = normalizeTwitchLogin(options.login);
   if (!login) {
     throw new Error('Twitch reader login is required');
@@ -84,6 +89,41 @@ export function createTwitchChatClient(options: TwitchChatClientOptions): Twitch
   const accessToken = stripOAuthPrefix(options.accessToken.trim());
   if (!accessToken) {
     throw new Error('Twitch access token is required');
+  }
+
+  return createTwitchIrcClient({
+    ...options,
+    credentials: {
+      kind: 'oauth',
+      login,
+      accessToken,
+    },
+  });
+}
+
+export function createAnonymousTwitchChatClient(options: AnonymousTwitchChatClientOptions): TwitchChatClient {
+  const login = normalizeTwitchLogin(options.login ?? createAnonymousTwitchLogin());
+  if (!login) {
+    throw new Error('Twitch anonymous login is required');
+  }
+
+  return createTwitchIrcClient({
+    ...options,
+    credentials: {
+      kind: 'anonymous',
+      login,
+    },
+  });
+}
+
+function createTwitchIrcClient(options: (TwitchChatClientOptions | AnonymousTwitchChatClientOptions) & {
+  credentials:
+    | { kind: 'oauth'; login: string; accessToken: string }
+    | { kind: 'anonymous'; login: string };
+}): TwitchChatClient {
+  const channel = normalizeTwitchChannel(options.channel);
+  if (!channel) {
+    throw new Error('Twitch channel login is required');
   }
 
   const WebSocketCtor = options.WebSocketCtor ?? globalThis.WebSocket;
@@ -130,8 +170,10 @@ export function createTwitchChatClient(options: TwitchChatClientOptions): Twitch
     socket.onopen = () => {
       reconnectAttempt = 0;
       sendRaw(`CAP REQ :${TWITCH_CAPABILITIES}`);
-      sendRaw(`PASS oauth:${accessToken}`);
-      sendRaw(`NICK ${login}`);
+      if (options.credentials.kind === 'oauth') {
+        sendRaw(`PASS oauth:${options.credentials.accessToken}`);
+      }
+      sendRaw(`NICK ${options.credentials.login}`);
       sendRaw(`JOIN #${channel}`);
       options.onStatus?.({ status: 'connected', channel, message: 'Socket opened' });
     };
@@ -197,6 +239,10 @@ export function createTwitchChatClient(options: TwitchChatClientOptions): Twitch
     disconnect,
     sendRaw,
   };
+}
+
+function createAnonymousTwitchLogin(): string {
+  return `justinfan${Math.floor(Math.random() * 90000) + 10000}`;
 }
 
 export function normalizeTwitchChannel(value: string): string {

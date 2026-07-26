@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type RefObject, type SetStateAction } from 'react';
 import {
   AlertTriangle,
   Ban,
@@ -28,6 +28,11 @@ import {
   approveRejectedSubmission,
   createAdminGameProjection,
   createPublicGameProjection,
+  createRectTemplate,
+  createRouteAwareBoard,
+  createRound,
+  createRng,
+  createThemesFromThemeBank,
   parseChatCommand,
   playerIdFromIdentity,
   type ApplyResult,
@@ -38,6 +43,7 @@ import {
   type PlayerIdentity,
   type PublicGameProjection,
   type RoundState,
+  type Theme,
 } from '@frogword/core';
 import {
   loadFallbackSnapshotPayload,
@@ -97,6 +103,7 @@ import {
   validateTwitchToken,
 } from './twitchAuthService';
 import {
+  createAnonymousTwitchChatClient,
   createTwitchChatClient,
   normalizeTwitchChannel,
   twitchIdentityFromChatMessage,
@@ -112,11 +119,28 @@ import {
 import { maintainStoredTwitchAuthRole, type TwitchAuthSessionResult } from './twitchAuthSessionService';
 
 const PUBLIC_ROUTE_TOKEN = 'game-view';
+const WEB_PLAY_ROUTE_TOKEN = 'web-play';
 const MAX_NOTIFICATIONS = 6;
 const MAX_PUBLIC_NOTIFICATIONS = 3;
+const MAX_WEB_CHAT_ENTRIES = 8;
 const MAX_AUDIT_ENTRIES = 120;
 const MAX_SAFE_RAW_LENGTH = 24;
 const TWITCH_AUTH_MAINTENANCE_INTERVAL_MS = 60 * 60 * 1000;
+const WEB_THEME_BANK_URL = `${import.meta.env.BASE_URL}theme-bank/main.json`;
+const WEB_SETTINGS_STORAGE_KEY = 'frogword:web-play:v1';
+const WEB_BLOCKLIST_STORAGE_KEY = 'frogword:web-blocklist:v1';
+const IS_PAGES_BUILD = import.meta.env.VITE_FROGWORD_TARGET === 'pages';
+const WEB_DEFAULT_BOARD_WIDTH = 25;
+const WEB_DEFAULT_BOARD_HEIGHT = 15;
+const WEB_MIN_BOARD_WIDTH = 8;
+const WEB_MIN_BOARD_HEIGHT = 8;
+const WEB_MAX_BOARD_WIDTH = 60;
+const WEB_MAX_BOARD_HEIGHT = 40;
+const WEB_PLAYER_MARKER_LABEL_LENGTH = 2;
+const WEB_MARKER_STEP_MS = 280;
+const WEB_MARKER_ANIMATION_SETTLE_MS = 90;
+const WEB_LANGUAGES = ['ru', 'en'] as const;
+const WEB_RANDOM_THEME_ID = '__random__';
 const SAFE_GAMEPLAY_COMMAND_TOKENS = new Set([
   'play',
   'играть',
@@ -241,6 +265,10 @@ type StartupRoundChoiceState =
   | { status: 'applying'; choice: 'continue' | 'new'; hydration?: LocalRoundHydrationResult };
 
 export function App() {
+  if (IS_PAGES_BUILD || isAnonymousWebPlayRoute()) {
+    return <AnonymousWebGameApp />;
+  }
+
   if (isPublicGameViewRoute()) {
     return <PublicGameWindow />;
   }
@@ -1692,14 +1720,1487 @@ function PublicGameWindow() {
   );
 }
 
+type WebThemeLoadState =
+  | { status: 'loading' }
+  | { status: 'ready'; count: number }
+  | { status: 'error'; message: string };
+
+type WebLanguage = (typeof WEB_LANGUAGES)[number];
+type WebRoute = 'home' | 'game';
+
+interface WebChatEntry {
+  id: string;
+  displayName: string;
+  text: string;
+  createdAt: string;
+  summaries: string[];
+}
+
+interface WebPlaySettings {
+  channel: string;
+  themeId: string;
+  language: WebLanguage;
+  boardWidth: number;
+  boardHeight: number;
+}
+
+interface ElementSize {
+  width: number;
+  height: number;
+}
+
+interface WebBlockedPlayer {
+  playerId: PlayerId;
+  login: string;
+  displayName: string;
+  blockedAt: string;
+}
+
+interface WebMarkerAnimation {
+  id: string;
+  playerId: PlayerId;
+  steps: Coord[];
+}
+
+interface WebNotice {
+  kind: 'error' | 'warning' | 'info';
+  message: string;
+}
+
+interface WebTexts {
+  appKicker: string;
+  appTitle: string;
+  homeLead: string;
+  homeText: string;
+  startRound: string;
+  loadingThemes: string;
+  channel: string;
+  channelPlaceholder: string;
+  theme: string;
+  themeSearch: string;
+  randomTheme: string;
+  randomThemeHint: string;
+  selectedTheme: string;
+  noThemeMatches: string;
+  boardWidth: string;
+  boardHeight: string;
+  howToPlay: string;
+  howToPlayTitle: string;
+  howToPlayIntro: string;
+  commandJoin: string;
+  commandMove: string;
+  commandSubmit: string;
+  commandReset: string;
+  commandQuit: string;
+  commandDemo: string;
+  launch: string;
+  cancel: string;
+  newGame: string;
+  disconnect: string;
+  openPanel: string;
+  close: string;
+  language: string;
+  russian: string;
+  english: string;
+  leaderboard: string;
+  players: string;
+  kickPlayer: string;
+  banPlayer: string;
+  blocklist: string;
+  blockedPlayers: string;
+  noBlockedPlayers: string;
+  unblockPlayer: string;
+  localBanHint: string;
+  found: string;
+  events: string;
+  commands: string;
+  noLeaders: string;
+  noPlayers: string;
+  noWords: string;
+  noEvents: string;
+  latest: string;
+  board: string;
+  channelRequired: string;
+  themeRequired: string;
+  chatNotConnected: string;
+  chatConnecting: string;
+  chatDisconnected: string;
+  chatError: string;
+  loadedThemes: (count: number) => string;
+  boardSize: (width: number, height: number) => string;
+  chatConnected: (channel: string) => string;
+  chatReconnecting: (attempt: number) => string;
+  wordsCount: (count: number) => string;
+  playersCount: (count: number) => string;
+}
+
+const WEB_TEXT: Record<WebLanguage, WebTexts> = {
+  ru: {
+    appKicker: 'Онлайн-игра для Twitch-чата',
+    appTitle: 'FrogWord',
+    homeLead: 'Зрители прыгают по буквам прямо из чата и собирают слова выбранной темы.',
+    homeText: 'Без установки и без авторизации: укажите канал, выберите тему и размер поля, затем запустите раунд.',
+    startRound: 'Начать игру',
+    loadingThemes: 'Загружаю темы',
+    channel: 'Twitch-канал',
+    channelPlaceholder: 'ник стримера',
+    theme: 'Тема',
+    themeSearch: 'Поиск темы',
+    randomTheme: 'Случайная тема',
+    randomThemeHint: 'Каждый запуск выберет одну из загруженных тем',
+    selectedTheme: 'Выбранная тема',
+    noThemeMatches: 'Темы не найдены',
+    boardWidth: 'Ширина',
+    boardHeight: 'Высота',
+    howToPlay: 'Как играть',
+    howToPlayTitle: 'Как играть',
+    howToPlayIntro: 'Пишите команды в Twitch-чат, чтобы прыгать по полю и собирать слова.',
+    commandJoin: 'войти в раунд',
+    commandMove: 'прыгнуть вправо на 3 клетки; также работают !л, !в и !н',
+    commandSubmit: 'проверить текущий набор как слово',
+    commandReset: 'сбросить набор и вернуться на пустую клетку',
+    commandQuit: 'выйти из раунда',
+    commandDemo: 'Пример: лягушка собирает слово "муха"',
+    launch: 'Запустить',
+    cancel: 'Отмена',
+    newGame: 'Новая игра',
+    disconnect: 'Отключить чат',
+    openPanel: 'Панель',
+    close: 'Закрыть',
+    language: 'Язык',
+    russian: 'Русский',
+    english: 'English',
+    leaderboard: 'Лидеры',
+    players: 'Игроки',
+    kickPlayer: 'Кикнуть',
+    banPlayer: 'Заблокировать',
+    blocklist: 'Чёрный список',
+    blockedPlayers: 'Заблокированные игроки',
+    noBlockedPlayers: 'Чёрный список пуст',
+    unblockPlayer: 'Разблокировать',
+    localBanHint: 'Это блокировка только внутри FrogWord в этом браузере.',
+    found: 'Найдено',
+    events: 'События',
+    commands: 'Команды',
+    noLeaders: 'Очков пока нет',
+    noPlayers: 'Игроки появятся после команды !играть',
+    noWords: 'Слова ещё не найдены',
+    noEvents: 'Пока тихо',
+    latest: 'Последнее',
+    board: 'Игровое поле',
+    channelRequired: 'Введите ник Twitch-канала',
+    themeRequired: 'Тема ещё не загружена',
+    chatNotConnected: 'Чат ждёт запуска',
+    chatConnecting: 'Подключаю чат',
+    chatDisconnected: 'Чат отключён',
+    chatError: 'Ошибка чата',
+    loadedThemes: (count) => `${count} тем загружено`,
+    boardSize: (width, height) => `${width}x${height}`,
+    chatConnected: (channel) => `Чат #${channel} подключён`,
+    chatReconnecting: (attempt) => `Переподключение ${attempt}`,
+    wordsCount: (count) => `${count} слов`,
+    playersCount: (count) => `${count} игроков`,
+  },
+  en: {
+    appKicker: 'Online Twitch chat game',
+    appTitle: 'FrogWord',
+    homeLead: 'Viewers hop across letters from chat and collect words from the selected theme.',
+    homeText: 'No install and no OAuth: choose a channel, theme and board size, then start the round.',
+    startRound: 'Start game',
+    loadingThemes: 'Loading themes',
+    channel: 'Twitch channel',
+    channelPlaceholder: 'streamer login',
+    theme: 'Theme',
+    themeSearch: 'Theme search',
+    randomTheme: 'Random theme',
+    randomThemeHint: 'Each launch picks one of the loaded themes',
+    selectedTheme: 'Selected theme',
+    noThemeMatches: 'No matching themes',
+    boardWidth: 'Width',
+    boardHeight: 'Height',
+    howToPlay: 'How to play',
+    howToPlayTitle: 'How to play',
+    howToPlayIntro: 'Type commands in Twitch chat to hop across the board and collect words.',
+    commandJoin: 'join the round',
+    commandMove: 'hop 3 cells right; !l, !u and !d work too',
+    commandSubmit: 'submit the current letters as a word',
+    commandReset: 'clear letters and respawn on an empty cell',
+    commandQuit: 'leave the round',
+    commandDemo: 'Example: the frog collects "муха"',
+    launch: 'Launch',
+    cancel: 'Cancel',
+    newGame: 'New game',
+    disconnect: 'Disconnect chat',
+    openPanel: 'Panel',
+    close: 'Close',
+    language: 'Language',
+    russian: 'Русский',
+    english: 'English',
+    leaderboard: 'Leaders',
+    players: 'Players',
+    kickPlayer: 'Kick',
+    banPlayer: 'Ban',
+    blocklist: 'Blocklist',
+    blockedPlayers: 'Blocked players',
+    noBlockedPlayers: 'Blocklist is empty',
+    unblockPlayer: 'Unblock',
+    localBanHint: 'This block only affects FrogWord in this browser.',
+    found: 'Found',
+    events: 'Events',
+    commands: 'Commands',
+    noLeaders: 'No scores yet',
+    noPlayers: 'Players appear after !play',
+    noWords: 'No words found yet',
+    noEvents: 'Nothing yet',
+    latest: 'Latest',
+    board: 'Game board',
+    channelRequired: 'Enter a Twitch channel login',
+    themeRequired: 'Theme is not loaded yet',
+    chatNotConnected: 'Chat is ready',
+    chatConnecting: 'Connecting chat',
+    chatDisconnected: 'Chat disconnected',
+    chatError: 'Chat error',
+    loadedThemes: (count) => `${count} themes loaded`,
+    boardSize: (width, height) => `${width}x${height}`,
+    chatConnected: (channel) => `Chat #${channel} connected`,
+    chatReconnecting: (attempt) => `Reconnect ${attempt}`,
+    wordsCount: (count) => `${count} words`,
+    playersCount: (count) => `${count} players`,
+  },
+};
+
+function AnonymousWebGameApp() {
+  const initialSettings = useMemo(() => loadWebPlaySettings(), []);
+  const [webRoute, setWebRouteState] = useState<WebRoute>(() => webRouteFromLocation());
+  const [themes, setThemes] = useState<Theme[]>([]);
+  const [themeLoadState, setThemeLoadState] = useState<WebThemeLoadState>({ status: 'loading' });
+  const [settings, setSettings] = useState<WebPlaySettings>(initialSettings);
+  const [setupDraft, setSetupDraft] = useState<WebPlaySettings>(initialSettings);
+  const [isSetupOpen, setIsSetupOpen] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isBlocklistOpen, setIsBlocklistOpen] = useState(false);
+  const [isHowToPlayOpen, setIsHowToPlayOpen] = useState(false);
+  const [round, setRound] = useState<RoundState | undefined>();
+  const [chatState, setChatState] = useState<TwitchChatUiState>({ status: 'idle' });
+  const [chatEntries, setChatEntries] = useState<WebChatEntry[]>([]);
+  const [blockedPlayers, setBlockedPlayers] = useState<WebBlockedPlayer[]>(() => loadWebBlocklist(initialSettings.channel));
+  const [markerAnimations, setMarkerAnimations] = useState<Record<string, WebMarkerAnimation>>({});
+  const [webNotice, setWebNotice] = useState<WebNotice | undefined>();
+  const chatClientRef = useRef<TwitchChatClient | undefined>(undefined);
+  const roundRef = useRef(round);
+  const blockedPlayersRef = useRef(blockedPlayers);
+
+  useEffect(() => {
+    roundRef.current = round;
+  }, [round]);
+
+  useEffect(() => {
+    blockedPlayersRef.current = blockedPlayers;
+  }, [blockedPlayers]);
+
+  useEffect(() => {
+    function handleRouteChange(): void {
+      const nextRoute = webRouteFromLocation();
+      setWebRouteState(nextRoute);
+      if (nextRoute === 'home' && roundRef.current) {
+        returnToWebHome(false);
+      }
+    }
+
+    window.addEventListener('hashchange', handleRouteChange);
+    window.addEventListener('popstate', handleRouteChange);
+    return () => {
+      window.removeEventListener('hashchange', handleRouteChange);
+      window.removeEventListener('popstate', handleRouteChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+
+    async function loadThemes(): Promise<void> {
+      try {
+        const response = await fetch(WEB_THEME_BANK_URL);
+        if (!response.ok) {
+          throw new Error(`Theme bank request failed: ${response.status}`);
+        }
+
+        const loadedThemes = createThemesFromThemeBank(await response.json());
+        if (loadedThemes.length === 0) {
+          throw new Error('Theme bank has no themes');
+        }
+
+        if (disposed) {
+          return;
+        }
+
+        const nextSettings = normalizeWebPlaySettings(loadWebPlaySettings(), loadedThemes);
+        setThemes(loadedThemes);
+        setSettings(nextSettings);
+        setSetupDraft(nextSettings);
+        setBlockedPlayers(loadWebBlocklist(nextSettings.channel));
+        setThemeLoadState({ status: 'ready', count: loadedThemes.length });
+      } catch (error) {
+        if (!disposed) {
+          const message = error instanceof Error ? error.message : String(error);
+          setThemeLoadState({
+            status: 'error',
+            message,
+          });
+          setWebNotice({ kind: 'error', message });
+        }
+      }
+    }
+
+    void loadThemes();
+
+    return () => {
+      disposed = true;
+      chatClientRef.current?.disconnect();
+    };
+  }, []);
+
+  const publicProjection = useMemo(
+    () => round ? createPublicGameProjection(round, { locale: round.theme.language }) : undefined,
+    [round],
+  );
+  const language = normalizeWebLanguage(settings.language);
+  const text = WEB_TEXT[language];
+  const isConnected = chatState.status === 'connected' || chatState.status === 'reconnecting';
+  const hasActiveRound = webRoute === 'game' && Boolean(round && publicProjection);
+
+  function openSetupModal(): void {
+    setSetupDraft(settings);
+    setIsSetupOpen(true);
+  }
+
+  function startNewWebRound(draft = setupDraft): void {
+    const normalizedDraft = normalizeWebPlaySettings(draft, themes);
+    const draftText = WEB_TEXT[normalizedDraft.language];
+    const normalizedChannel = normalizeTwitchChannel(normalizedDraft.channel);
+    if (!normalizedChannel) {
+      setWebNotice({ kind: 'error', message: draftText.channelRequired });
+      setIsSetupOpen(true);
+      return;
+    }
+
+    const theme = pickWebThemeForRound(normalizedDraft.themeId, themes);
+    if (!theme) {
+      setWebNotice({ kind: 'error', message: draftText.themeRequired });
+      return;
+    }
+
+    const nextSettings = normalizeWebPlaySettings({
+      ...normalizedDraft,
+      channel: normalizedChannel,
+      themeId: normalizedDraft.themeId === WEB_RANDOM_THEME_ID ? WEB_RANDOM_THEME_ID : theme.id,
+    }, themes);
+    const nextRound = createWebPlayRound(theme, nextSettings);
+    roundRef.current = nextRound;
+    setSettings(nextSettings);
+    setSetupDraft(nextSettings);
+    setBlockedPlayers(loadWebBlocklist(normalizedChannel));
+    setRound(nextRound);
+    setChatEntries([]);
+    setMarkerAnimations({});
+    setIsSidebarOpen(false);
+    setIsSetupOpen(false);
+    setWebRouteState('game');
+    writeWebRoute('game');
+    saveWebPlaySettings(nextSettings);
+    connectAnonymousChat(normalizedChannel, nextSettings.language);
+  }
+
+  function connectAnonymousChat(channel: string, language = settings.language): void {
+    const labels = WEB_TEXT[language];
+    const normalizedChannel = normalizeTwitchChannel(channel);
+    if (!normalizedChannel) {
+      const message = labels.channelRequired;
+      setChatState({ status: 'error', message });
+      setWebNotice({ kind: 'error', message });
+      return;
+    }
+
+    try {
+      chatClientRef.current?.disconnect();
+      const client = createAnonymousTwitchChatClient({
+        channel: normalizedChannel,
+        onMessage: handleAnonymousTwitchMessage,
+        onStatus: handleAnonymousTwitchStatus,
+      });
+      chatClientRef.current = client;
+      setChatState({ status: 'connecting', channel: normalizedChannel });
+      client.connect();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setChatState({
+        status: 'error',
+        channel: normalizedChannel,
+        message,
+      });
+      setWebNotice({ kind: 'error', message });
+    }
+  }
+
+  function disconnectAnonymousChat(): void {
+    const channel = 'channel' in chatState ? chatState.channel : undefined;
+    chatClientRef.current?.disconnect();
+    chatClientRef.current = undefined;
+    setChatState({
+      status: 'disconnected',
+      ...(channel ? { channel } : {}),
+      message: 'Отключено',
+    });
+  }
+
+  function returnToWebHome(updateUrl = true): void {
+    chatClientRef.current?.disconnect();
+    chatClientRef.current = undefined;
+    roundRef.current = undefined;
+    setRound(undefined);
+    setChatEntries([]);
+    setMarkerAnimations({});
+    setIsSidebarOpen(false);
+    setIsBlocklistOpen(false);
+    setIsHowToPlayOpen(false);
+    setChatState({ status: 'idle' });
+    setWebRouteState('home');
+    if (updateUrl) {
+      writeWebRoute('home');
+    }
+  }
+
+  function handleAnonymousTwitchStatus(event: TwitchChatStatusEvent): void {
+    switch (event.status) {
+      case 'connecting':
+        setChatState({ status: 'connecting', channel: event.channel });
+        break;
+      case 'connected':
+        setWebNotice(undefined);
+        setChatState((current) => ({
+          status: 'connected',
+          channel: event.channel,
+          connectedAt: current.status === 'connected' ? current.connectedAt : nowIso(),
+          ...(event.message ? { message: event.message } : {}),
+        }));
+        break;
+      case 'reconnecting':
+        setChatState({
+          status: 'reconnecting',
+          channel: event.channel,
+          attempt: event.attempt,
+          delayMs: event.delayMs,
+          message: event.message,
+        });
+        break;
+      case 'disconnected':
+        setChatState({
+          status: 'disconnected',
+          ...(event.channel ? { channel: event.channel } : {}),
+          ...(event.message ? { message: event.message } : {}),
+        });
+        break;
+      case 'error':
+        setWebNotice({ kind: 'error', message: event.message });
+        setChatState({
+          status: 'error',
+          ...(event.channel ? { channel: event.channel } : {}),
+          message: event.message,
+        });
+        break;
+    }
+  }
+
+  function handleAnonymousTwitchMessage(message: TwitchChatMessage): void {
+    setChatState((current) => (
+      current.status === 'connected'
+        ? {
+          ...current,
+          lastMessageAt: nowIso(),
+          lastMessageFrom: message.displayName,
+        }
+        : current
+    ));
+
+    if (!message.text.trim().startsWith('!')) {
+      return;
+    }
+
+    const currentRound = roundRef.current;
+    if (!currentRound) {
+      return;
+    }
+
+    const receivedAt = nowIso();
+    const identity = {
+      ...twitchIdentityFromChatMessage(message),
+      color: message.color ?? webColorFromString(message.login),
+    };
+    const playerId = playerIdFromIdentity(identity);
+    if (
+      isWebPlayerBlocked(blockedPlayersRef.current, identity.login, playerId)
+      || currentRound.players[playerId]?.status === 'kicked'
+      || currentRound.players[playerId]?.status === 'blocked'
+    ) {
+      return;
+    }
+
+    const result = applyCommand(currentRound, {
+      player: identity,
+      command: parseChatCommand(message.text, currentRound.settings.maxMovesPerMessage),
+      receivedAt,
+    });
+    roundRef.current = result.state;
+    setRound(result.state);
+    const markerMovement = webMarkerAnimationsFromEvents(result.events, `${receivedAt}:${message.login}`);
+    if (markerMovement.length > 0) {
+      setMarkerAnimations((current) => ({
+        ...current,
+        ...Object.fromEntries(markerMovement.map((animation) => [animation.playerId, animation])),
+      }));
+    }
+    const notice = webNoticeForDomainEvents(
+      result.state,
+      result.events,
+      normalizeWebLanguage(settings.language),
+    );
+    if (notice) {
+      setWebNotice(notice);
+    }
+    setChatEntries((current) => [
+      {
+        id: `${receivedAt}:${message.login}:${message.tags.id ?? message.raw.length}`,
+        displayName: message.displayName,
+        text: message.text,
+        createdAt: receivedAt,
+        summaries: result.events.map((event) => summarizeDomainEvent(result.state, event)),
+      },
+      ...current,
+    ].slice(0, MAX_WEB_CHAT_ENTRIES));
+  }
+
+  function changeLanguage(language: WebLanguage): void {
+    const nextSettings = { ...settings, language };
+    setSettings(nextSettings);
+    setSetupDraft((current) => ({ ...current, language }));
+    saveWebPlaySettings(nextSettings);
+  }
+
+  function applyWebModeration(action: 'kickPlayer' | 'banPlayer', playerId: PlayerId): void {
+    const currentRound = roundRef.current;
+    if (!currentRound) {
+      return;
+    }
+    const player = currentRound.players[playerId];
+
+    const result = applyHostAction(currentRound, {
+      kind: action,
+      playerId,
+      actedAt: nowIso(),
+      ...(action === 'banPlayer' ? { reason: 'web round moderation' } : {}),
+    });
+    roundRef.current = result.state;
+    setRound(result.state);
+    const notice = webNoticeForDomainEvents(
+      result.state,
+      result.events,
+      normalizeWebLanguage(settings.language),
+    );
+    if (notice) {
+      setWebNotice(notice);
+    }
+
+    if (action === 'banPlayer') {
+      const blocked: WebBlockedPlayer = {
+        playerId,
+        login: player?.identity.login ?? playerId,
+        displayName: player?.identity.displayName ?? playerId,
+        blockedAt: nowIso(),
+      };
+      setBlockedPlayers((current) => saveWebBlocklist(settings.channel, upsertWebBlockedPlayer(current, blocked)));
+    }
+  }
+
+  function clearMarkerAnimation(playerId: PlayerId, animationId: string): void {
+    setMarkerAnimations((current) => {
+      if (current[playerId]?.id !== animationId) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[playerId];
+      return next;
+    });
+  }
+
+  function unblockWebPlayer(playerId: PlayerId): void {
+    setBlockedPlayers((current) => saveWebBlocklist(
+      settings.channel,
+      current.filter((entry) => entry.playerId !== playerId),
+    ));
+
+    const currentRound = roundRef.current;
+    if (currentRound?.blockedPlayers[playerId] || currentRound?.players[playerId]?.status === 'blocked') {
+      const result = applyHostAction(currentRound, { kind: 'unbanPlayer', playerId, actedAt: nowIso() });
+      roundRef.current = result.state;
+      setRound(result.state);
+      const notice = webNoticeForDomainEvents(
+        result.state,
+        result.events,
+        normalizeWebLanguage(settings.language),
+      );
+      if (notice) {
+        setWebNotice(notice);
+      }
+    }
+  }
+
+  return (
+    <>
+      <main className={`web-play-shell ${hasActiveRound ? 'web-game-shell' : 'web-home-shell'}`}>
+        <FrogBackgroundMark />
+        <FrogBackgroundMarkAlt />
+        {hasActiveRound && publicProjection ? (
+          <WebGameView
+            chatEntries={chatEntries}
+            chatState={chatState}
+            isConnected={isConnected}
+            isSidebarOpen={isSidebarOpen}
+            markerAnimations={markerAnimations}
+            blockedPlayers={blockedPlayers}
+            projection={publicProjection}
+            settings={settings}
+            text={text}
+            onDisconnect={disconnectAnonymousChat}
+            onOpenHome={() => returnToWebHome()}
+            onModeratePlayer={applyWebModeration}
+            onMarkerAnimationComplete={clearMarkerAnimation}
+            onLanguageChange={changeLanguage}
+            onOpenBlocklist={() => setIsBlocklistOpen(true)}
+            onOpenHowToPlay={() => setIsHowToPlayOpen(true)}
+            onOpenSetup={openSetupModal}
+            onSidebarToggle={() => setIsSidebarOpen((current) => !current)}
+          />
+        ) : (
+          <WebHome
+            language={language}
+            text={text}
+            themeLoadState={themeLoadState}
+            onLanguageChange={changeLanguage}
+            onStart={() => setIsSetupOpen(true)}
+          />
+        )}
+      </main>
+
+      {isSetupOpen ? (
+        <WebSetupModal
+          draft={setupDraft}
+          text={WEB_TEXT[normalizeWebLanguage(setupDraft.language)]}
+          themeLoadState={themeLoadState}
+          themes={themes}
+          onChange={setSetupDraft}
+          onClose={() => setIsSetupOpen(false)}
+          onSubmit={() => startNewWebRound(setupDraft)}
+        />
+      ) : null}
+
+      {webNotice ? (
+        <WebNoticeToast notice={webNotice} onDismiss={() => setWebNotice(undefined)} />
+      ) : null}
+
+      {isBlocklistOpen ? (
+        <WebBlocklistModal
+          blockedPlayers={blockedPlayers}
+          text={text}
+          onClose={() => setIsBlocklistOpen(false)}
+          onUnblock={unblockWebPlayer}
+        />
+      ) : null}
+
+      {isHowToPlayOpen ? (
+        <WebHowToPlayModal text={text} onClose={() => setIsHowToPlayOpen(false)} />
+      ) : null}
+    </>
+  );
+}
+
+interface WebHomeProps {
+  language: WebLanguage;
+  text: WebTexts;
+  themeLoadState: WebThemeLoadState;
+  onLanguageChange: (language: WebLanguage) => void;
+  onStart: () => void;
+}
+
+function WebHome({ language, text, themeLoadState, onLanguageChange, onStart }: WebHomeProps) {
+  const canStart = themeLoadState.status === 'ready';
+
+  return (
+    <section className="web-home" aria-label="FrogWord">
+      <header className="web-home-top">
+        <span>FrogWord</span>
+        <WebLanguageMenu language={language} text={text} onChange={onLanguageChange} />
+      </header>
+
+      <div className="web-home-content">
+        <p className="web-play-kicker">{text.appKicker}</p>
+        <h1>{text.appTitle}</h1>
+        <p className="web-home-lead">{text.homeLead}</p>
+        <p className="web-home-copy">{text.homeText}</p>
+        <div className="web-home-actions">
+          <button className="web-primary-button web-launch-button" type="button" disabled={!canStart} onClick={onStart}>
+            <Radio size={20} />
+            {canStart ? text.startRound : text.loadingThemes}
+          </button>
+          <span>
+            {themeLoadState.status === 'ready'
+              ? text.loadedThemes(themeLoadState.count)
+              : themeLoadState.status === 'error'
+                ? themeLoadState.message
+                : text.loadingThemes}
+          </span>
+        </div>
+      </div>
+
+      <WebMiniBoardDemo word="комар" variant="home" />
+    </section>
+  );
+}
+
+interface WebSetupModalProps {
+  draft: WebPlaySettings;
+  text: WebTexts;
+  themeLoadState: WebThemeLoadState;
+  themes: Theme[];
+  onChange: Dispatch<SetStateAction<WebPlaySettings>>;
+  onClose: () => void;
+  onSubmit: () => void;
+}
+
+function WebSetupModal({ draft, text, themeLoadState, themes, onChange, onClose, onSubmit }: WebSetupModalProps) {
+  const safeDraft = normalizeWebPlaySettings(draft, themes);
+  const [themeQuery, setThemeQuery] = useState('');
+  const filteredThemes = useMemo(() => {
+    const query = themeQuery.trim().toLocaleLowerCase();
+    if (!query) {
+      return themes;
+    }
+
+    return themes.filter((theme) => theme.title.toLocaleLowerCase().includes(query));
+  }, [themeQuery, themes]);
+  const selectedThemeTitle = safeDraft.themeId === WEB_RANDOM_THEME_ID
+    ? text.randomTheme
+    : themes.find((theme) => theme.id === safeDraft.themeId)?.title ?? text.themeRequired;
+
+  return (
+    <div className="web-modal-backdrop" role="presentation">
+      <form
+        className="web-setup-modal"
+        aria-label={text.startRound}
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSubmit();
+        }}
+      >
+        <header>
+          <div>
+            <p className="web-play-kicker">{text.startRound}</p>
+            <h2>{text.appTitle}</h2>
+          </div>
+          <button className="web-icon-button" type="button" title={text.close} onClick={onClose}>
+            <X size={18} />
+          </button>
+        </header>
+
+        <label className="web-field web-field-wide">
+          <span>{text.channel}</span>
+          <input
+            autoFocus
+            value={safeDraft.channel}
+            placeholder={text.channelPlaceholder}
+            onChange={(event) => {
+              const channel = event.currentTarget.value;
+              onChange((current) => ({ ...current, channel }));
+            }}
+          />
+        </label>
+
+        <section className="web-theme-picker web-field-wide" aria-label={text.theme}>
+          <div className="web-theme-picker-top">
+            <span>{text.selectedTheme}</span>
+            <strong>{selectedThemeTitle}</strong>
+          </div>
+
+          <button
+            aria-pressed={safeDraft.themeId === WEB_RANDOM_THEME_ID}
+            className={safeDraft.themeId === WEB_RANDOM_THEME_ID ? 'web-theme-random web-theme-selected' : 'web-theme-random'}
+            disabled={themeLoadState.status !== 'ready'}
+            type="button"
+            onClick={() => onChange((current) => ({ ...current, themeId: WEB_RANDOM_THEME_ID }))}
+          >
+            <strong>{text.randomTheme}</strong>
+            <span>{text.randomThemeHint}</span>
+          </button>
+
+          <label className="web-field">
+            <span>{text.themeSearch}</span>
+            <input
+              value={themeQuery}
+              placeholder={text.theme}
+              onChange={(event) => setThemeQuery(event.currentTarget.value)}
+            />
+          </label>
+
+          <div className="web-theme-grid" aria-label={text.theme}>
+            {filteredThemes.length === 0 ? (
+              <div className="web-theme-empty">{text.noThemeMatches}</div>
+            ) : filteredThemes.map((theme) => (
+              <button
+                aria-pressed={safeDraft.themeId === theme.id}
+                className={safeDraft.themeId === theme.id ? 'web-theme-option web-theme-selected' : 'web-theme-option'}
+                key={theme.id}
+                type="button"
+                onClick={() => onChange((current) => ({ ...current, themeId: theme.id }))}
+              >
+                {theme.title}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <div className="web-field-row">
+          <label className="web-field">
+            <span>{text.boardWidth}</span>
+            <input
+              inputMode="numeric"
+              max={WEB_MAX_BOARD_WIDTH}
+              min={WEB_MIN_BOARD_WIDTH}
+              type="number"
+              value={safeDraft.boardWidth}
+              onChange={(event) => {
+                const boardWidth = clampWebDimension(
+                  event.currentTarget.value,
+                  WEB_MIN_BOARD_WIDTH,
+                  WEB_MAX_BOARD_WIDTH,
+                  safeDraft.boardWidth,
+                );
+                onChange((current) => ({ ...current, boardWidth }));
+              }}
+            />
+          </label>
+          <label className="web-field">
+            <span>{text.boardHeight}</span>
+            <input
+              inputMode="numeric"
+              max={WEB_MAX_BOARD_HEIGHT}
+              min={WEB_MIN_BOARD_HEIGHT}
+              type="number"
+              value={safeDraft.boardHeight}
+              onChange={(event) => {
+                const boardHeight = clampWebDimension(
+                  event.currentTarget.value,
+                  WEB_MIN_BOARD_HEIGHT,
+                  WEB_MAX_BOARD_HEIGHT,
+                  safeDraft.boardHeight,
+                );
+                onChange((current) => ({ ...current, boardHeight }));
+              }}
+            />
+          </label>
+        </div>
+
+        <div className="web-modal-bottom">
+          <WebLanguageMenu language={safeDraft.language} text={text} onChange={(language) => onChange((current) => ({ ...current, language }))} />
+          <button className="web-primary-button" type="submit" disabled={themeLoadState.status !== 'ready'}>
+            <Radio size={18} />
+            {text.launch}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+interface WebGameViewProps {
+  blockedPlayers: WebBlockedPlayer[];
+  chatEntries: WebChatEntry[];
+  chatState: TwitchChatUiState;
+  isConnected: boolean;
+  isSidebarOpen: boolean;
+  markerAnimations: Record<string, WebMarkerAnimation>;
+  projection: PublicGameProjection;
+  settings: WebPlaySettings;
+  text: WebTexts;
+  onDisconnect: () => void;
+  onLanguageChange: (language: WebLanguage) => void;
+  onMarkerAnimationComplete: (playerId: PlayerId, animationId: string) => void;
+  onModeratePlayer: (action: 'kickPlayer' | 'banPlayer', playerId: PlayerId) => void;
+  onOpenBlocklist: () => void;
+  onOpenHowToPlay: () => void;
+  onOpenHome: () => void;
+  onOpenSetup: () => void;
+  onSidebarToggle: () => void;
+}
+
+function WebGameView({
+  blockedPlayers,
+  chatEntries,
+  chatState,
+  isConnected,
+  isSidebarOpen,
+  markerAnimations,
+  projection,
+  settings,
+  text,
+  onDisconnect,
+  onLanguageChange,
+  onMarkerAnimationComplete,
+  onModeratePlayer,
+  onOpenBlocklist,
+  onOpenHowToPlay,
+  onOpenHome,
+  onOpenSetup,
+  onSidebarToggle,
+}: WebGameViewProps) {
+  const markerStackIndexes = useMemo(() => markerStackIndexByPlayer(projection), [projection]);
+  const language = normalizeWebLanguage(settings.language);
+  const hasMarkerAnimations = Object.keys(markerAnimations).length > 0;
+  const [displayBoardProjection, setDisplayBoardProjection] = useState(projection);
+  const boardZoneRef = useRef<HTMLElement | null>(null);
+  const boardZoneSize = useElementSize(boardZoneRef);
+  const boardProjection = hasMarkerAnimations ? displayBoardProjection : projection;
+
+  useEffect(() => {
+    if (!hasMarkerAnimations) {
+      setDisplayBoardProjection(projection);
+    }
+  }, [hasMarkerAnimations, projection]);
+
+  return (
+    <section className="web-game" aria-label="FrogWord web play">
+      <header className="web-game-topbar">
+        <div className="web-game-left-actions">
+          <button className="web-game-brand" type="button" title="FrogWord" onClick={onOpenHome}>
+            <span>FrogWord</span>
+            <small>{text.boardSize(projection.board.width, projection.board.height)}</small>
+          </button>
+          <button className="web-icon-button" type="button" title={text.openPanel} onClick={onSidebarToggle}>
+            <MessageSquare size={18} />
+          </button>
+          <button className="web-icon-button" type="button" title={text.blocklist} onClick={onOpenBlocklist}>
+            <Ban size={18} />
+          </button>
+          <button className="web-text-button" type="button" onClick={onOpenHowToPlay}>
+            {text.howToPlay}
+          </button>
+        </div>
+
+        <strong className="web-game-theme-title">{projection.themeTitle}</strong>
+
+        <div className="web-top-actions">
+          <span className={`web-chat-state web-chat-state-${chatState.status}`}>
+            {webChatStatusCopy(chatState, text)}
+          </span>
+          <button className="web-icon-button" type="button" title={text.newGame} onClick={onOpenSetup}>
+            <RefreshCcw size={18} />
+          </button>
+          <button className="web-icon-button" type="button" disabled={!isConnected} title={text.disconnect} onClick={onDisconnect}>
+            <Unplug size={18} />
+          </button>
+          <WebLanguageMenu language={language} text={text} onChange={onLanguageChange} />
+        </div>
+      </header>
+
+      <div className="web-game-body">
+        <WebRoundRoster
+          blockedPlayers={blockedPlayers}
+          projection={projection}
+          text={text}
+          onModeratePlayer={onModeratePlayer}
+        />
+
+        <section className="web-board-zone" aria-label={text.board} ref={boardZoneRef}>
+          <div
+            className="board-grid web-board-grid"
+            style={webBoardGridStyle(boardProjection.board.width, boardProjection.board.height, boardZoneSize)}
+          >
+            {boardProjection.board.cells.flatMap((row) => (
+              row.map((cell) => {
+                return (
+                  <div className={`board-cell board-cell-${cell.kind}`} key={cell.id}>
+                    {cell.kind === 'letter' ? <span>{cell.char}</span> : null}
+                  </div>
+                );
+              })
+            ))}
+            <div className="web-marker-layer">
+              {projection.players.map((marker) => (
+                <PlayerFrogMarker
+                  animation={markerAnimations[marker.playerId]}
+                  key={marker.playerId}
+                  marker={marker}
+                  stackIndex={markerStackIndexes.get(marker.playerId) ?? 0}
+                  onAnimationComplete={onMarkerAnimationComplete}
+                />
+              ))}
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <WebGameSidebar
+        blockedPlayers={blockedPlayers}
+        entries={chatEntries}
+        isOpen={isSidebarOpen}
+        projection={projection}
+        language={language}
+        text={text}
+        onClose={onSidebarToggle}
+      />
+    </section>
+  );
+}
+
+function PlayerFrogMarker({
+  animation,
+  marker,
+  stackIndex = 0,
+  onAnimationComplete,
+}: {
+  animation: WebMarkerAnimation | undefined;
+  marker: PublicGameProjection['players'][number];
+  stackIndex?: number;
+  onAnimationComplete?: (playerId: PlayerId, animationId: string) => void;
+}) {
+  const coord = useAnimatedMarkerCoord(marker, animation, onAnimationComplete);
+  const label = marker.displayName.slice(0, WEB_PLAYER_MARKER_LABEL_LENGTH).toUpperCase();
+
+  return (
+    <div
+      className="player-marker player-frog-marker"
+      style={frogMarkerStyle(marker.markerColor, coord, stackIndex)}
+      title={marker.displayName}
+    >
+      <svg viewBox="0 0 128 128" aria-hidden="true" focusable="false">
+        <path
+          d="M14.16 48.37c-.43 4.5-10 10.84-9.57 26.89s13.09 44.06 57.72 44.77c44.63.7 60.96-27.31 61.1-46.6c.13-17.88-8.58-21.43-9.57-26.04c-.84-3.94 6.76-21.96-10.28-28.44c-20.11-7.65-27.6 11.68-28.16 12.1c-.56.42-6.05.7-10.84.7s-10 0-10.56-.56c-.56-.56-12.81-19.99-30.55-11.83c-16.64 7.67-9.01 26.05-9.29 29.01z"
+          fill="currentColor"
+        />
+        <path d="M103.08 42.36c0 5.29-3 9.76-8.02 9.57c-4.33-.16-7.84-4.29-7.84-9.57s3.51-9.49 7.84-9.57c5.11-.1 8.02 4.28 8.02 9.57z" fill="#2f2f2f" />
+        <path d="M41.89 41.61c.28 6.76-3 10.14-8.02 10.04c-4.22-.08-7.56-3.19-7.65-9.67c-.08-5.34 1.97-9.48 7.65-9.67c4.22-.13 7.8 3.97 8.02 9.3z" fill="#2f2f2f" />
+        <path d="M53.29 63.5c-.81 1.79-3.06 2.35-4.57 1.48c-1.5-.87-1.91-3.23-.93-4.93c.98-1.7 2.65-1.96 3.87-1.48c1.63.64 2.83 2.28 1.63 4.93z" fill="#2f2f2f" />
+        <path d="M80.33 60.55c.77 1.86-.16 4.04-1.94 4.57c-1.78.53-3.69-.61-4.26-2.54c-.57-1.93.14-3.61 1.87-4.3c1.13-.44 3.19-.48 4.33 2.27z" fill="#2f2f2f" />
+        <path d="M27.44 78.31l.38 2.72s10.51 10.98 35.85 11.36c26 .39 37.26-12.29 37.26-12.29l-11.64-5.63s-11.07 4.69-25.34 4.41c-14.27-.28-28.34-4.41-28.34-4.41l-8.17 3.84z" fill="#ff6011" />
+        <path d="M104.59 71.92c-3.28-4.79-7.23-.43-13.42 1.88c-3.43 1.28-5.7 2.02-5.7 2.02s5.09.99 7.34 2.21s6.17 3.89 6.17 3.89s8.37-5.96 5.61-10z" fill="#865b51" />
+        <path d="M24.81 71.36c-3.94 2.63 3.02 9.68 3.02 9.68s2.15-1.98 5.06-3.2s7.78-2.1 7.78-2.1s-5.63-1.27-8.9-3.16c-1.69-.96-4.71-2.72-6.96-1.22z" fill="#865b51" />
+      </svg>
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function WebRoundRoster({
+  blockedPlayers,
+  projection,
+  text,
+  onModeratePlayer,
+}: {
+  blockedPlayers: WebBlockedPlayer[];
+  projection: PublicGameProjection;
+  text: WebTexts;
+  onModeratePlayer: (action: 'kickPlayer' | 'banPlayer', playerId: PlayerId) => void;
+}) {
+  const participantById = new Map(projection.participantPanel.map((row) => [row.playerId, row]));
+  const blockedPlayerIds = new Set(blockedPlayers.map((entry) => entry.playerId));
+  const visibleRows = projection.leaderboard.filter((row) => (
+    row.status !== 'blocked'
+    && row.status !== 'kicked'
+    && !blockedPlayerIds.has(row.playerId)
+  ));
+
+  return (
+    <aside className="web-round-roster" aria-label={text.leaderboard}>
+      <header>
+        <Trophy size={16} />
+        <strong>{text.leaderboard}</strong>
+      </header>
+
+      <div className="web-roster-list">
+        {visibleRows.length === 0 ? (
+          <span className="web-roster-empty">{text.noPlayers}</span>
+        ) : visibleRows.slice(0, 18).map((row) => {
+          const participant = participantById.get(row.playerId);
+          const isActive = row.status === 'active' || row.status === 'idle';
+          const canKick = row.status === 'active' || row.status === 'idle';
+          const canBan = row.status !== 'blocked';
+          return (
+            <article
+              className={isActive ? 'web-roster-row' : 'web-roster-row web-roster-row-inactive'}
+              key={row.playerId}
+            >
+              <span className="web-roster-rank">#{row.rank}</span>
+              <span className="marker-dot" style={markerStyle(participant?.markerColor)} />
+              <div>
+                <strong>{row.displayName}</strong>
+                <small>{participant?.buffer || '...'}</small>
+              </div>
+              <b>{row.score}</b>
+              <div className="web-roster-actions">
+                <button
+                  type="button"
+                  disabled={!canKick}
+                  title={text.kickPlayer}
+                  onClick={() => onModeratePlayer('kickPlayer', row.playerId)}
+                >
+                  <UserMinus size={13} />
+                </button>
+                <button
+                  type="button"
+                  disabled={!canBan}
+                  title={text.banPlayer}
+                  onClick={() => onModeratePlayer('banPlayer', row.playerId)}
+                >
+                  <Ban size={13} />
+                </button>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </aside>
+  );
+}
+
+interface WebGameSidebarProps {
+  blockedPlayers: WebBlockedPlayer[];
+  entries: WebChatEntry[];
+  isOpen: boolean;
+  language: WebLanguage;
+  projection: PublicGameProjection;
+  text: WebTexts;
+  onClose: () => void;
+}
+
+function WebGameSidebar({ blockedPlayers, entries, isOpen, language, projection, text, onClose }: WebGameSidebarProps) {
+  const blockedPlayerIds = new Set(blockedPlayers.map((entry) => entry.playerId));
+  const sidebarCommands = webSidebarCommands(language);
+  const visibleLeaderboard = projection.leaderboard.filter((row) => (
+    row.status !== 'blocked'
+    && row.status !== 'kicked'
+    && !blockedPlayerIds.has(row.playerId)
+  ));
+  const visibleParticipants = projection.participantPanel.filter((row) => (
+    row.status !== 'blocked'
+    && row.status !== 'kicked'
+    && !blockedPlayerIds.has(row.playerId)
+  ));
+
+  return (
+    <aside className={`web-game-sidebar ${isOpen ? 'web-game-sidebar-open' : ''}`} aria-hidden={!isOpen}>
+      <header>
+        <strong>{text.openPanel}</strong>
+        <button className="web-icon-button" type="button" title={text.close} onClick={onClose}>
+          <X size={18} />
+        </button>
+      </header>
+
+      <section>
+        <h2>{text.commands}</h2>
+        <div className="web-command-grid" aria-label={text.commands}>
+          {sidebarCommands.map((command) => (
+            <code key={command}>{command}</code>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <h2>{text.leaderboard}</h2>
+        <div className="web-sidebar-list">
+          {visibleLeaderboard.length === 0 ? (
+            <span>{text.noLeaders}</span>
+          ) : visibleLeaderboard.slice(0, 12).map((row) => (
+            <div className="web-sidebar-row" key={row.playerId}>
+              <span>#{row.rank} {row.displayName}</span>
+              <strong>{row.score}</strong>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <h2>{text.players}</h2>
+        <div className="web-sidebar-list">
+          {visibleParticipants.length === 0 ? (
+            <span>{text.noPlayers}</span>
+          ) : visibleParticipants.slice(0, 16).map((row) => (
+            <div className="web-sidebar-row" key={row.playerId}>
+              <span>{row.displayName}</span>
+              <strong>{row.buffer || '...'}</strong>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <h2>{text.found}</h2>
+        <div className="web-sidebar-list">
+          {projection.foundWords.length === 0 ? (
+            <span>{text.noWords}</span>
+          ) : projection.foundWords.slice(0, 16).map((word) => (
+            <div className="web-sidebar-row" key={word.id}>
+              <span>{word.canonical}</span>
+              <strong>{word.points}</strong>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <h2>{text.events}</h2>
+        <div className="web-sidebar-list">
+          {entries.length === 0 ? (
+            <span>{text.noEvents}</span>
+          ) : entries.map((entry) => (
+            <article className="web-chat-entry" key={entry.id}>
+              <div>
+                <strong>{entry.displayName}</strong>
+                <time>{formatTime(entry.createdAt)}</time>
+              </div>
+              <code>{entry.text}</code>
+              {entry.summaries.slice(0, 2).map((summary) => (
+                <span key={summary}>{summary}</span>
+              ))}
+            </article>
+          ))}
+        </div>
+      </section>
+    </aside>
+  );
+}
+
+function WebBlocklistModal({
+  blockedPlayers,
+  text,
+  onClose,
+  onUnblock,
+}: {
+  blockedPlayers: WebBlockedPlayer[];
+  text: WebTexts;
+  onClose: () => void;
+  onUnblock: (playerId: PlayerId) => void;
+}) {
+  return (
+    <div className="web-modal-backdrop" role="presentation">
+      <section className="web-blocklist-modal" aria-label={text.blockedPlayers}>
+        <header>
+          <div>
+            <h2>{text.blockedPlayers}</h2>
+          </div>
+          <button className="web-icon-button" type="button" title={text.close} onClick={onClose}>
+            <X size={18} />
+          </button>
+        </header>
+
+        <p>{text.localBanHint}</p>
+
+        <div className="web-blocklist-list">
+          {blockedPlayers.length === 0 ? (
+            <span>{text.noBlockedPlayers}</span>
+          ) : blockedPlayers.map((player) => (
+            <article className="web-blocklist-row" key={player.playerId}>
+              <div>
+                <strong>{player.displayName}</strong>
+                {isDifferentTwitchLogin(player.displayName, player.login) ? <small>{player.login}</small> : null}
+              </div>
+              <button className="web-secondary-button" type="button" onClick={() => onUnblock(player.playerId)}>
+                {text.unblockPlayer}
+              </button>
+            </article>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function WebHowToPlayModal({ text, onClose }: { text: WebTexts; onClose: () => void }) {
+  return (
+    <div className="web-modal-backdrop" role="presentation">
+      <section className="web-how-modal" aria-label={text.howToPlayTitle}>
+        <header>
+          <div>
+            <h2>{text.howToPlayTitle}</h2>
+          </div>
+          <button className="web-icon-button" type="button" title={text.close} onClick={onClose}>
+            <X size={18} />
+          </button>
+        </header>
+
+        <p>{text.howToPlayIntro}</p>
+
+        <div className="web-how-content">
+          <div className="web-command-list">
+            <div><code>!играть</code><span>{text.commandJoin}</span></div>
+            <div><code>!п3</code><span>{text.commandMove}</span></div>
+            <div><code>!слово</code><span>{text.commandSubmit}</span></div>
+            <div><code>!сброс</code><span>{text.commandReset}</span></div>
+            <div><code>!уйти</code><span>{text.commandQuit}</span></div>
+          </div>
+
+          <div className="web-how-demo">
+            <strong>{text.commandDemo}</strong>
+            <WebMiniBoardDemo word="муха" variant="how" />
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function WebMiniBoardDemo({ word, variant }: { word: 'комар' | 'муха'; variant: 'home' | 'how' }) {
+  const letters = variant === 'home'
+    ? [' ', 'Л', 'Е', 'К', 'С', 'Т', 'Ж', 'И', 'Н', 'П', 'У', 'В', 'Д', 'М', 'Г', 'О', 'Ч', 'Б', 'Ц', 'А', 'Ш', 'Э', 'Ю', 'Р']
+    : [' ', 'Р', 'М', 'С', 'О', 'Л', 'К', 'Е', 'Т', 'Н', 'И', 'В', 'Ж', 'Б', 'У', 'Д', 'Г', 'Х', 'Ф', 'Ц', 'П', 'Ш', 'З', 'А'];
+  const commands = word === 'муха' ? ['!п2', '!н2', '!п3', '!н1'] : [];
+  const collectedLetters = word === 'комар' ? ['К', 'О', 'М', 'А', 'Р'] : [];
+  const visitedIndexes = word === 'комар' ? [3, 15, 13, 19, 23] : [2, 14, 17, 23];
+
+  return (
+    <div className={`web-mini-demo web-mini-demo-${variant}`} aria-hidden="true">
+      <div className="web-mini-board">
+        {letters.map((letter, index) => (
+          <span
+            className={webMiniCellClassName(letter, index, visitedIndexes)}
+            key={`${letter}:${index}`}
+          >
+            {letter}
+          </span>
+        ))}
+        <i className={`web-mini-frog web-mini-frog-${word}`}>
+          <svg viewBox="0 0 128 128" aria-hidden="true" focusable="false">
+            <path d="M14.16 48.37c-.43 4.5-10 10.84-9.57 26.89s13.09 44.06 57.72 44.77c44.63.7 60.96-27.31 61.1-46.6c.13-17.88-8.58-21.43-9.57-26.04c-.84-3.94 6.76-21.96-10.28-28.44c-20.11-7.65-27.6 11.68-28.16 12.1c-.56.42-6.05.7-10.84.7s-10 0-10.56-.56c-.56-.56-12.81-19.99-30.55-11.83c-16.64 7.67-9.01 26.05-9.29 29.01z" fill="currentColor" />
+            <path d="M103.08 42.36c0 5.29-3 9.76-8.02 9.57c-4.33-.16-7.84-4.29-7.84-9.57s3.51-9.49 7.84-9.57c5.11-.1 8.02 4.28 8.02 9.57z" fill="#2f2f2f" />
+            <path d="M41.89 41.61c.28 6.76-3 10.14-8.02 10.04c-4.22-.08-7.56-3.19-7.65-9.67c-.08-5.34 1.97-9.48 7.65-9.67c4.22-.13 7.8 3.97 8.02 9.3z" fill="#2f2f2f" />
+            <path d="M27.44 78.31l.38 2.72s10.51 10.98 35.85 11.36c26 .39 37.26-12.29 37.26-12.29l-11.64-5.63s-11.07 4.69-25.34 4.41c-14.27-.28-28.34-4.41-28.34-4.41l-8.17 3.84z" fill="#ff6011" />
+          </svg>
+        </i>
+      </div>
+      {collectedLetters.length > 0 ? (
+        <div className="web-mini-word">
+          {collectedLetters.map((letter, index) => (
+            <span className={`web-mini-word-letter web-mini-word-letter-${index}`} key={`${letter}:${index}`}>
+              {letter}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <div className="web-mini-commands">
+        {commands.map((command, index) => (
+          <code className={`web-mini-command web-mini-command-${index}`} key={`${command}:${index}`}>
+            {command}
+          </code>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function webMiniCellClassName(letter: string, index: number, visitedIndexes: number[]): string {
+  const classes = [letter === ' ' ? 'web-mini-empty' : ''];
+  const visitedIndex = visitedIndexes.indexOf(index);
+  if (visitedIndex >= 0) {
+    classes.push('web-mini-visited', `web-mini-visited-${visitedIndex}`);
+  }
+
+  return classes.filter(Boolean).join(' ');
+}
+
+function isDifferentTwitchLogin(displayName: string, login: string): boolean {
+  return displayName.trim().toLocaleLowerCase() !== login.trim().toLocaleLowerCase();
+}
+
+interface WebLanguageMenuProps {
+  language: WebLanguage;
+  text: WebTexts;
+  onChange: (language: WebLanguage) => void;
+}
+
+function WebLanguageMenu({ language, text, onChange }: WebLanguageMenuProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent): void {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [isOpen]);
+
+  function chooseLanguage(nextLanguage: WebLanguage): void {
+    onChange(nextLanguage);
+    setIsOpen(false);
+  }
+
+  return (
+    <div className={isOpen ? 'web-language-menu web-language-menu-open' : 'web-language-menu'} ref={menuRef}>
+      <button
+        aria-expanded={isOpen}
+        aria-label={text.language}
+        className="web-language-trigger"
+        type="button"
+        onClick={() => setIsOpen((current) => !current)}
+      >
+        {language.toUpperCase()}
+      </button>
+      {isOpen ? (
+        <div className="web-language-popover">
+          <button type="button" onClick={() => chooseLanguage('ru')}>{text.russian}</button>
+          <button type="button" onClick={() => chooseLanguage('en')}>{text.english}</button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function WebNoticeToast({ notice, onDismiss }: { notice: WebNotice; onDismiss: () => void }) {
+  const onDismissRef = useRef(onDismiss);
+
+  useEffect(() => {
+    onDismissRef.current = onDismiss;
+  }, [onDismiss]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => onDismissRef.current(), notice.kind === 'error' ? 6500 : 5200);
+    return () => window.clearTimeout(timeout);
+  }, [notice.kind, notice.message]);
+
+  return (
+    <div className={`web-notice web-notice-${notice.kind}`} role={notice.kind === 'error' ? 'alert' : 'status'}>
+      <span>{notice.message}</span>
+      <button className="web-icon-button" type="button" title="Dismiss" onClick={onDismiss}>
+        <X size={16} />
+      </button>
+    </div>
+  );
+}
+
 interface PublicGameViewProps {
   round: RoundState;
   notifications?: GameNotification[];
   mode: 'embedded' | 'standalone';
   onReset?: () => void;
+  eyebrow?: string;
 }
 
-function PublicGameView({ round, notifications = [], mode, onReset }: PublicGameViewProps) {
+function PublicGameView({ round, notifications = [], mode, onReset, eyebrow }: PublicGameViewProps) {
   const publicProjection = useMemo(() => createPublicGameProjection(round, { locale: 'ru' }), [round]);
   const markersByCell = useMemo(() => groupMarkersByCell(publicProjection), [publicProjection]);
   const surfaceClassName = mode === 'standalone' ? 'game-view-surface' : 'game-surface';
@@ -1709,7 +3210,7 @@ function PublicGameView({ round, notifications = [], mode, onReset }: PublicGame
     <section className={surfaceClassName} aria-label={mode === 'standalone' ? 'Public game view' : 'Public game preview'}>
       <header className="round-header">
         <div>
-          <p className="eyebrow">{mode === 'standalone' ? 'FrogWord game view' : 'FrogWord local round'}</p>
+          <p className="eyebrow">{eyebrow ?? (mode === 'standalone' ? 'FrogWord game view' : 'FrogWord local round')}</p>
           <h1>{publicProjection.themeTitle}</h1>
         </div>
         <div className="round-actions">
@@ -2462,6 +3963,614 @@ function isPublicGameViewRoute(): boolean {
     || window.location.hash.includes(PUBLIC_ROUTE_TOKEN);
 }
 
+function isAnonymousWebPlayRoute(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  return window.location.pathname.includes(WEB_PLAY_ROUTE_TOKEN)
+    || window.location.hash.includes(WEB_PLAY_ROUTE_TOKEN);
+}
+
+function webRouteFromLocation(): WebRoute {
+  if (typeof window === 'undefined') {
+    return 'home';
+  }
+
+  return /(?:^#\/?|\/)(?:play|game)(?:$|[/?#])/u.test(window.location.hash)
+    ? 'game'
+    : 'home';
+}
+
+function writeWebRoute(route: WebRoute): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const hash = IS_PAGES_BUILD
+    ? (route === 'game' ? '#/play' : '#/')
+    : (route === 'game' ? '#/web-play/play' : '#/web-play');
+  const nextUrl = `${window.location.pathname}${window.location.search}${hash}`;
+  window.history.pushState(null, '', nextUrl);
+}
+
+function useElementSize(ref: RefObject<HTMLElement | null>): ElementSize | undefined {
+  const [size, setSize] = useState<ElementSize | undefined>();
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) {
+      return undefined;
+    }
+
+    function updateSize(width: number, height: number): void {
+      setSize((current) => (
+        current?.width === width && current.height === height
+          ? current
+          : { width, height }
+      ));
+    }
+
+    const rect = element.getBoundingClientRect();
+    updateSize(rect.width, rect.height);
+
+    if (typeof ResizeObserver === 'undefined') {
+      return undefined;
+    }
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) {
+        return;
+      }
+
+      updateSize(entry.contentRect.width, entry.contentRect.height);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [ref]);
+
+  return size;
+}
+
+function useAnimatedMarkerCoord(
+  marker: PublicGameProjection['players'][number],
+  animation: WebMarkerAnimation | undefined,
+  onAnimationComplete: ((playerId: PlayerId, animationId: string) => void) | undefined,
+): Coord {
+  const [coord, setCoord] = useState<Coord>({ row: marker.row, col: marker.col });
+  const onAnimationCompleteRef = useRef(onAnimationComplete);
+
+  useEffect(() => {
+    onAnimationCompleteRef.current = onAnimationComplete;
+  }, [onAnimationComplete]);
+
+  useEffect(() => {
+    if (!animation || animation.steps.length === 0) {
+      setCoord((current) => (
+        current.row === marker.row && current.col === marker.col
+          ? current
+          : { row: marker.row, col: marker.col }
+      ));
+      return undefined;
+    }
+
+    const timers = animation.steps.map((step, index) => (
+      window.setTimeout(() => setCoord(step), index * WEB_MARKER_STEP_MS)
+    ));
+    timers.push(window.setTimeout(() => {
+      onAnimationCompleteRef.current?.(marker.playerId, animation.id);
+    }, animation.steps.length * WEB_MARKER_STEP_MS + WEB_MARKER_ANIMATION_SETTLE_MS));
+
+    return () => {
+      for (const timer of timers) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [animation?.id, marker.col, marker.playerId, marker.row]);
+
+  return coord;
+}
+
+function createWebPlayRound(theme: Theme, settings: WebPlaySettings): RoundState {
+  const seed = `web-${theme.id}-${Date.now()}`;
+  const boardTemplate = createRectTemplate(
+    settings.boardWidth,
+    settings.boardHeight,
+    `web-play-${settings.boardWidth}x${settings.boardHeight}`,
+  );
+  const board = createRouteAwareBoard({
+    template: boardTemplate,
+    theme,
+    rng: createRng(`${seed}:board`),
+    seed,
+  });
+
+  return createRound({
+    id: seed,
+    theme,
+    boardTemplate,
+    board,
+    seed,
+    settings: {
+      maxJumpDistance: 'unlimited',
+      warnOnDeadEnd: true,
+    },
+  });
+}
+
+function defaultWebPlaySettings(): WebPlaySettings {
+  return {
+    channel: '',
+    themeId: '',
+    language: 'ru',
+    boardWidth: WEB_DEFAULT_BOARD_WIDTH,
+    boardHeight: WEB_DEFAULT_BOARD_HEIGHT,
+  };
+}
+
+function loadWebPlaySettings(): WebPlaySettings {
+  if (typeof window === 'undefined') {
+    return defaultWebPlaySettings();
+  }
+
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(WEB_SETTINGS_STORAGE_KEY) ?? '{}') as Partial<WebPlaySettings>;
+    const storedSettings: Partial<WebPlaySettings> = {
+      channel: typeof parsed.channel === 'string' ? parsed.channel : '',
+      themeId: typeof parsed.themeId === 'string' ? parsed.themeId : '',
+      language: normalizeWebLanguage(parsed.language),
+    };
+    if (typeof parsed.boardWidth === 'number') {
+      storedSettings.boardWidth = parsed.boardWidth;
+    }
+    if (typeof parsed.boardHeight === 'number') {
+      storedSettings.boardHeight = parsed.boardHeight;
+    }
+    return normalizeWebPlaySettings(storedSettings);
+  } catch {
+    return defaultWebPlaySettings();
+  }
+}
+
+function normalizeWebPlaySettings(settings: Partial<WebPlaySettings>, themes: readonly Theme[] = []): WebPlaySettings {
+  const defaults = defaultWebPlaySettings();
+  const themeId = typeof settings.themeId === 'string' ? settings.themeId : defaults.themeId;
+  const resolvedThemeId = themeId === WEB_RANDOM_THEME_ID
+    ? WEB_RANDOM_THEME_ID
+    : themes.length > 0 && !themes.some((theme) => theme.id === themeId)
+    ? themes[0]!.id
+    : themeId;
+
+  return {
+    channel: typeof settings.channel === 'string' ? settings.channel : defaults.channel,
+    themeId: resolvedThemeId,
+    language: normalizeWebLanguage(settings.language),
+    boardWidth: clampWebDimension(
+      settings.boardWidth,
+      WEB_MIN_BOARD_WIDTH,
+      WEB_MAX_BOARD_WIDTH,
+      defaults.boardWidth,
+    ),
+    boardHeight: clampWebDimension(
+      settings.boardHeight,
+      WEB_MIN_BOARD_HEIGHT,
+      WEB_MAX_BOARD_HEIGHT,
+      defaults.boardHeight,
+    ),
+  };
+}
+
+function pickWebThemeForRound(themeId: string, themes: readonly Theme[]): Theme | undefined {
+  if (themes.length === 0) {
+    return undefined;
+  }
+
+  if (themeId === WEB_RANDOM_THEME_ID) {
+    return themes[Math.floor(Math.random() * themes.length)] ?? themes[0];
+  }
+
+  return themes.find((theme) => theme.id === themeId) ?? themes[0];
+}
+
+function normalizeWebLanguage(value: unknown): WebLanguage {
+  return WEB_LANGUAGES.includes(value as WebLanguage) ? value as WebLanguage : 'ru';
+}
+
+function clampWebDimension(value: unknown, min: number, max: number, fallback: number): number {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.max(min, Math.min(max, Math.round(parsed)));
+}
+
+function saveWebPlaySettings(settings: WebPlaySettings): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.localStorage.setItem(WEB_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+}
+
+function loadWebBlocklist(channel: string): WebBlockedPlayer[] {
+  if (typeof window === 'undefined') {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(webBlocklistStorageKey(channel)) ?? '[]') as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.flatMap((entry): WebBlockedPlayer[] => {
+      if (!entry || typeof entry !== 'object') {
+        return [];
+      }
+      const candidate = entry as Partial<WebBlockedPlayer>;
+      if (
+        typeof candidate.playerId !== 'string'
+        || typeof candidate.login !== 'string'
+        || typeof candidate.displayName !== 'string'
+        || typeof candidate.blockedAt !== 'string'
+      ) {
+        return [];
+      }
+
+      return [{
+        playerId: candidate.playerId,
+        login: candidate.login,
+        displayName: candidate.displayName,
+        blockedAt: candidate.blockedAt,
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function saveWebBlocklist(channel: string, players: WebBlockedPlayer[]): WebBlockedPlayer[] {
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem(webBlocklistStorageKey(channel), JSON.stringify(players));
+  }
+
+  return players;
+}
+
+function webBlocklistStorageKey(channel: string): string {
+  return `${WEB_BLOCKLIST_STORAGE_KEY}:${normalizeTwitchChannel(channel) || 'default'}`;
+}
+
+function upsertWebBlockedPlayer(players: WebBlockedPlayer[], player: WebBlockedPlayer): WebBlockedPlayer[] {
+  const normalizedLogin = player.login.toLocaleLowerCase();
+  return [
+    player,
+    ...players.filter((entry) => (
+      entry.playerId !== player.playerId
+      && entry.login.toLocaleLowerCase() !== normalizedLogin
+    )),
+  ];
+}
+
+function isWebPlayerBlocked(players: readonly WebBlockedPlayer[], login: string, playerId: PlayerId): boolean {
+  const normalizedLogin = login.toLocaleLowerCase();
+  return players.some((entry) => (
+    entry.playerId === playerId
+    || entry.login.toLocaleLowerCase() === normalizedLogin
+  ));
+}
+
+function webBoardGridStyle(width: number, height: number, containerSize: ElementSize | undefined): CSSProperties {
+  const density = Math.max(width / WEB_DEFAULT_BOARD_WIDTH, height / WEB_DEFAULT_BOARD_HEIGHT, 1);
+  const gap = Math.max(1, Math.min(5, Math.round(4 / Math.sqrt(density))));
+  const radius = Math.max(2, Math.min(12, Math.round(10 / Math.sqrt(density))));
+  const measuredWidth = Math.max(0, Math.floor(containerSize?.width ?? 0));
+  const measuredHeight = Math.max(0, Math.floor(containerSize?.height ?? 0));
+  const horizontalGaps = gap * Math.max(0, width - 1);
+  const verticalGaps = gap * Math.max(0, height - 1);
+  const measuredCellSize = measuredWidth > 0 && measuredHeight > 0
+    ? Math.max(1, Math.floor(Math.min(
+      (measuredWidth - horizontalGaps) / width,
+      (measuredHeight - verticalGaps) / height,
+    )))
+    : undefined;
+  const measuredGridWidth = measuredCellSize
+    ? measuredCellSize * width + horizontalGaps
+    : undefined;
+  const measuredGridHeight = measuredCellSize
+    ? measuredCellSize * height + verticalGaps
+    : undefined;
+  const fallbackCellSize = `min(calc((100vw - 36px) / ${width}), calc((100dvh - 82px) / ${height}))`;
+
+  return {
+    ...boardGridStyle(width, height),
+    '--web-board-cols': width,
+    '--web-board-rows': height,
+    '--web-board-gap': `${gap}px`,
+    '--web-cell-radius': `${radius}px`,
+    '--web-cell-px': measuredCellSize ? `${measuredCellSize}px` : fallbackCellSize,
+    '--web-cell-font': `clamp(7px, calc(var(--web-cell-px) * 0.52), 38px)`,
+    '--web-marker-size': `clamp(12px, calc(var(--web-cell-px) * 0.82), 46px)`,
+    ...(measuredGridWidth ? { width: `${measuredGridWidth}px` } : {}),
+    ...(measuredGridHeight ? { height: `${measuredGridHeight}px` } : {}),
+  } as CSSProperties;
+}
+
+function webChatStatusCopy(state: TwitchChatUiState, text: WebTexts): string {
+  switch (state.status) {
+    case 'connected':
+      return text.chatConnected(state.channel);
+    case 'connecting':
+      return text.chatConnecting;
+    case 'reconnecting':
+      return text.chatReconnecting(state.attempt);
+    case 'disconnected':
+      return text.chatDisconnected;
+    case 'error':
+      return text.chatError;
+    case 'idle':
+      return text.chatNotConnected;
+  }
+}
+
+function webSidebarCommands(language: WebLanguage): string[] {
+  return language === 'ru'
+    ? ['!играть', '!п3', '!л2', '!в2', '!н2', '!слово', '!сброс', '!уйти']
+    : ['!play', '!r3', '!l2', '!u2', '!d2', '!word', '!reset', '!quit'];
+}
+
+function webNoticeForDomainEvents(
+  state: RoundState,
+  events: DomainEvent[],
+  language: WebLanguage,
+): WebNotice | undefined {
+  for (const event of events) {
+    switch (event.type) {
+      case 'command.rejected': {
+        const name = displayName(state, event.playerId);
+        const raw = sanitizeGameplayRaw(event.raw);
+        const reason = webCommandRejectionMessage(event.reason, language);
+        return {
+          kind: 'error',
+          message: language === 'ru'
+            ? `${name}: команда не выполнена (${reason})${raw ? `: ${raw}` : ''}`
+            : `${name}: command rejected (${reason})${raw ? `: ${raw}` : ''}`,
+        };
+      }
+      case 'submission.rejected': {
+        const name = displayName(state, event.playerId);
+        const submission = state.rejectedSubmissions.find((entry) => entry.id === event.rejectedId);
+        const raw = sanitizeWordFragment(submission?.rawWord);
+        const reason = webSubmissionRejectionMessage(event.reason, language);
+        return {
+          kind: 'warning',
+          message: language === 'ru'
+            ? `${name}: ${raw ? `"${raw}" ` : 'слово '}не принято (${reason})`
+            : `${name}: ${raw ? `"${raw}" ` : 'word '}not accepted (${reason})`,
+        };
+      }
+      case 'player.deadEndDetected': {
+        const name = displayName(state, event.playerId);
+        const raw = sanitizeWordFragment(event.buffer);
+        return {
+          kind: 'warning',
+          message: language === 'ru'
+            ? `${name}: набор${raw ? ` "${raw}"` : ''} не ведёт ни к одному слову`
+            : `${name}: ${raw ? `"${raw}" ` : 'this letter chain '}does not lead to any word`,
+        };
+      }
+      case 'hostAction.rejected':
+        return {
+          kind: 'error',
+          message: language === 'ru'
+            ? `Действие не выполнено (${webHostActionRejectionMessage(event.reason, language)})`
+            : `Action rejected (${webHostActionRejectionMessage(event.reason, language)})`,
+        };
+      default:
+        break;
+    }
+  }
+
+  return undefined;
+}
+
+function webCommandRejectionMessage(reason: string, language: WebLanguage): string {
+  if (language !== 'ru') {
+    return commandRejectionMessage(reason);
+  }
+
+  const messages: Record<string, string> = {
+    blocked_path: 'прыжок пересекает заблокированную клетку',
+    help_not_implemented: 'команда помощи пока не готова',
+    invalid_distance: 'неверная дистанция прыжка',
+    jump_too_far: 'слишком дальний прыжок',
+    missing_bang: 'сообщение не похоже на команду',
+    no_spawn_available: 'нет свободной клетки для входа',
+    occupied_cell: 'целевая клетка занята',
+    out_of_bounds: 'прыжок выходит за поле',
+    player_blocked: 'игрок заблокирован',
+    player_kicked: 'игрок кикнут до конца раунда',
+    player_not_active: 'игрок не в раунде',
+    round_not_running: 'раунд не запущен',
+    too_many_moves: 'слишком много прыжков в одном сообщении',
+    unknown_command: 'неизвестная команда',
+  };
+  return messages[reason] ?? humanizeReason(reason);
+}
+
+function webSubmissionRejectionMessage(reason: string, language: WebLanguage): string {
+  if (language !== 'ru') {
+    return submissionRejectionMessage(reason);
+  }
+
+  const messages: Record<string, string> = {
+    too_short: 'слишком короткое слово',
+    word_not_found: 'слова нет в выбранной теме',
+  };
+  return messages[reason] ?? humanizeReason(reason);
+}
+
+function webHostActionRejectionMessage(reason: string, language: WebLanguage): string {
+  if (language !== 'ru') {
+    return hostActionRejectionMessage(reason);
+  }
+
+  const messages: Record<string, string> = {
+    player_already_blocked: 'игрок уже заблокирован',
+    player_blocked: 'игрок заблокирован',
+    player_not_blocked: 'игрок не заблокирован',
+    player_not_found: 'игрок не найден',
+    player_already_credited: 'игрок уже получил очки за это слово',
+    submission_not_found: 'слово не найдено',
+    submission_not_pending: 'слово уже обработано',
+    word_too_short_for_theme: 'слово слишком короткое для темы',
+  };
+  return messages[reason] ?? humanizeReason(reason);
+}
+
+function webColorFromString(value: string): string {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+
+  const palette = [
+    '#287f56',
+    '#5b9f3a',
+    '#d59c2c',
+    '#3d8c72',
+    '#8a9f35',
+    '#2f9d8c',
+    '#c27b34',
+  ];
+  return palette[hash % palette.length]!;
+}
+
+function frogMarkerColors(color: string): { markerColor: string; labelColor: string; labelOutline: string } {
+  const rgb = parseHexColor(color);
+  if (!rgb) {
+    return {
+      markerColor: 'hsl(142 58% 34%)',
+      labelColor: 'hsl(142 38% 92%)',
+      labelOutline: 'hsl(142 35% 12% / 0.78)',
+    };
+  }
+
+  const { hue, saturation, lightness } = rgbToHsl(rgb.r, rgb.g, rgb.b);
+  const markerSaturation = Math.max(42, Math.min(84, saturation + 6));
+  const markerLightness = normalizedFrogMarkerLightness(hue, lightness);
+  const labelSaturation = markerLightness < 50
+    ? Math.max(24, Math.min(54, markerSaturation - 18))
+    : Math.max(34, Math.min(72, markerSaturation + 4));
+  const labelLightness = markerLightness < 50 ? 92 : 16;
+  const labelOutlineLightness = markerLightness < 50 ? 12 : 94;
+  const labelOutlineAlpha = markerLightness < 50 ? 0.78 : 0.84;
+
+  return {
+    markerColor: `hsl(${Math.round(hue)} ${Math.round(markerSaturation)}% ${Math.round(markerLightness)}%)`,
+    labelColor: `hsl(${Math.round(hue)} ${Math.round(labelSaturation)}% ${Math.round(labelLightness)}%)`,
+    labelOutline: `hsl(${Math.round(hue)} ${Math.round(Math.max(24, labelSaturation - 8))}% ${labelOutlineLightness}% / ${labelOutlineAlpha})`,
+  };
+}
+
+function normalizedFrogMarkerLightness(hue: number, lightness: number): number {
+  if (lightness <= 30) {
+    return 34;
+  }
+
+  if (lightness >= 70) {
+    return 66;
+  }
+
+  if (lightness > 40 && lightness < 60) {
+    return isWarmHue(hue) ? 66 : 34;
+  }
+
+  return lightness < 50 ? 34 : 66;
+}
+
+function isWarmHue(hue: number): boolean {
+  return hue >= 15 && hue <= 72;
+}
+
+function parseHexColor(color: string): { r: number; g: number; b: number } | undefined {
+  const normalized = color.trim().replace(/^#/u, '');
+  if (!/^[0-9a-f]{6}$/iu.test(normalized)) {
+    return undefined;
+  }
+
+  return {
+    r: Number.parseInt(normalized.slice(0, 2), 16),
+    g: Number.parseInt(normalized.slice(2, 4), 16),
+    b: Number.parseInt(normalized.slice(4, 6), 16),
+  };
+}
+
+function rgbToHsl(r: number, g: number, b: number): { hue: number; saturation: number; lightness: number } {
+  const red = r / 255;
+  const green = g / 255;
+  const blue = b / 255;
+  const max = Math.max(red, green, blue);
+  const min = Math.min(red, green, blue);
+  const delta = max - min;
+  const lightness = (max + min) / 2;
+
+  if (delta === 0) {
+    return { hue: 140, saturation: 0, lightness: lightness * 100 };
+  }
+
+  const saturation = delta / (1 - Math.abs(2 * lightness - 1));
+  let hue = 0;
+  if (max === red) {
+    hue = 60 * (((green - blue) / delta) % 6);
+  } else if (max === green) {
+    hue = 60 * ((blue - red) / delta + 2);
+  } else {
+    hue = 60 * ((red - green) / delta + 4);
+  }
+
+  return {
+    hue: hue < 0 ? hue + 360 : hue,
+    saturation: saturation * 100,
+    lightness: lightness * 100,
+  };
+}
+
+function FrogBackgroundMark() {
+  return (
+    <svg
+      className="web-frog-mark"
+      viewBox="0 0 512 512"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d=""
+      />
+      <path
+        d=""
+      />
+    </svg>
+  );
+}
+
+function FrogBackgroundMarkAlt() {
+  return (
+    <svg
+      className="web-frog-mark-alt"
+      viewBox="0 0 512 512"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d=""
+      />
+    </svg>
+  );
+}
+
 function createRendererSnapshot(round: RoundState, notifications: GameNotification[]): RendererSnapshot {
   return {
     version: 1,
@@ -2708,6 +4817,35 @@ function groupMarkersByCell(publicProjection: PublicGameProjection): Map<string,
   return markers;
 }
 
+function markerStackIndexByPlayer(publicProjection: PublicGameProjection): Map<PlayerId, number> {
+  const indexByPlayer = new Map<PlayerId, number>();
+  const countByCell = new Map<string, number>();
+  for (const marker of publicProjection.players) {
+    const key = coordKey(marker.row, marker.col);
+    const index = countByCell.get(key) ?? 0;
+    countByCell.set(key, index + 1);
+    indexByPlayer.set(marker.playerId, index);
+  }
+  return indexByPlayer;
+}
+
+function webMarkerAnimationsFromEvents(events: DomainEvent[], idPrefix: string): WebMarkerAnimation[] {
+  const stepsByPlayer = new Map<PlayerId, Coord[]>();
+  for (const event of events) {
+    if (event.type !== 'player.moved') {
+      continue;
+    }
+
+    stepsByPlayer.set(event.playerId, [...(stepsByPlayer.get(event.playerId) ?? []), event.to]);
+  }
+
+  return [...stepsByPlayer.entries()].map(([playerId, steps]) => ({
+    id: `${idPrefix}:${playerId}:${steps.map((step) => coordKey(step.row, step.col)).join('|')}`,
+    playerId,
+    steps,
+  }));
+}
+
 function coordKey(row: number, col: number): string {
   return `${row}:${col}`;
 }
@@ -2721,6 +4859,21 @@ function boardGridStyle(width: number, height: number): CSSProperties {
 
 function markerStyle(color?: string): CSSProperties {
   return { '--marker-color': color ?? '#2c9f6f' } as CSSProperties;
+}
+
+function frogMarkerStyle(color: string | undefined, coord?: Coord, stackIndex = 0): CSSProperties {
+  const { labelColor, labelOutline, markerColor } = frogMarkerColors(color ?? '#2c9f6f');
+  return {
+    '--marker-color': markerColor,
+    '--frog-label-color': labelColor,
+    '--frog-label-outline': labelOutline,
+    ...(coord ? {
+      '--marker-col': coord.col,
+      '--marker-row': coord.row,
+      '--marker-stack-offset-x': `${Math.min(stackIndex, 2) * 6}px`,
+      '--marker-stack-offset-y': `${Math.min(stackIndex, 2) * -5}px`,
+    } : {}),
+  } as CSSProperties;
 }
 
 function isDemoPlayerId(playerId: PlayerId): boolean {

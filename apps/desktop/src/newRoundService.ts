@@ -1,6 +1,8 @@
 import {
   createRectTemplate,
+  createRng,
   createRound,
+  createRouteAwareBoard,
   createStarterTheme,
   type RoundState,
   type Theme,
@@ -95,12 +97,21 @@ export function createRoundFromNewRoundForm(
     themeId: theme.id,
   });
 
+  const boardTemplate = createRectTemplate(form.width, form.height, `local-demo-${form.width}x${form.height}`);
+  const board = createRouteAwareBoard({
+    template: boardTemplate,
+    theme,
+    rng: createRng(`${form.seed}:board`),
+    seed: form.seed,
+  });
+
   return {
     form,
     round: createRound({
       id: input.roundId,
       theme,
-      boardTemplate: createRectTemplate(form.width, form.height, `local-demo-${form.width}x${form.height}`),
+      boardTemplate,
+      board,
       seed: form.seed,
       settings: {
         warnOnDeadEnd: form.warnOnDeadEnd,

@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
+    "build:pages": "npm run build:pages --workspace @frogword/desktop",
     "dev:desktop": "npm run dev --workspace @frogword/desktop",
     "test": "npm run test --workspaces --if-present",
     "theme-bank:preview": "npm run build --workspace @frogword/core && node scripts/theme-bank-to-starter-pack.mjs",

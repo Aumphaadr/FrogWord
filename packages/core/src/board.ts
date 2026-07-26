@@ -114,6 +114,74 @@ export function createBoard(input: {
   };
 }
 
+export function createRouteAwareBoard(input: {
+  template: BoardTemplate;
+  theme: Theme;
+  rng: Rng;
+  seed: string;
+  emptyCellRatio?: number;
+  guaranteedWordCount?: number;
+  maxRouteWordLength?: number;
+  maxRouteHopDistance?: number;
+}): Board {
+  const board = createBoard(input);
+  const active = activeCoords(board);
+  const targetWordCount = Math.min(
+    input.guaranteedWordCount ?? defaultGuaranteedWordCount(active.length),
+    Math.max(1, Math.floor(active.length / 3)),
+  );
+  const maxWordLength = input.maxRouteWordLength ?? Math.max(
+    5,
+    Math.min(10, Math.floor(Math.sqrt(active.length))),
+  );
+  const maxHopDistance = input.maxRouteHopDistance ?? Math.max(
+    3,
+    Math.min(9, Math.ceil(Math.sqrt(active.length) / 3)),
+  );
+  const candidates = routeCandidateWords(input.theme, maxWordLength, input.rng);
+  if (candidates.length < targetWordCount) {
+    // Small boards clamp the preferred word length hard enough that a theme of
+    // long words can end up with no candidates at all; fall back to longer
+    // words rather than shipping a board with nothing guaranteed on it.
+    const extendedWordLength = Math.max(maxWordLength, Math.min(14, Math.floor(active.length / 2)));
+    for (const word of routeCandidateWords(input.theme, extendedWordLength, input.rng)) {
+      if (!candidates.includes(word)) {
+        candidates.push(word);
+      }
+    }
+  }
+  const reserved = new Set<string>();
+  let embedded = 0;
+
+  for (const word of candidates) {
+    if (embedded >= targetWordCount) {
+      break;
+    }
+
+    const route = createWordRoute(board, word, {
+      maxHopDistance,
+      reserved,
+      rng: input.rng,
+    });
+
+    if (!route) {
+      continue;
+    }
+
+    setCell(board, route.start, { kind: 'empty', id: cellId(route.start) });
+    reserved.add(coordKey(route.start));
+
+    for (const step of route.steps) {
+      setCell(board, step.coord, { kind: 'letter', id: cellId(step.coord), char: step.char });
+      reserved.add(coordKey(step.coord));
+    }
+
+    embedded += 1;
+  }
+
+  return board;
+}
+
 export function createBoardFromRows(rows: string[], seed = 'test-board'): Board {
   if (rows.length === 0) {
     throw new Error('Board rows cannot be empty');
@@ -146,11 +214,25 @@ export function createBoardFromRows(rows: string[], seed = 'test-board'): Board 
   };
 }
 
-export function refillPathCells(board: Board, path: Coord[], theme: Theme, rng: Rng): Coord[] {
+export function refillPathCells(
+  board: Board,
+  path: Coord[],
+  theme: Theme,
+  rng: Rng,
+  options?: { keepEmpty?: Coord[] },
+): Coord[] {
   const uniquePath = uniqueCoords(path).filter((coord) => getCell(board, coord)?.kind !== 'blocked');
   const emptyCount = uniquePath.filter((coord) => getCell(board, coord)?.kind === 'empty').length;
-  const shuffled = shuffleInPlace([...uniquePath], rng);
-  const emptyKeys = new Set(shuffled.slice(0, emptyCount).map(coordKey));
+  const pathKeys = new Set(uniquePath.map(coordKey));
+  const keepEmptyKeys = new Set(
+    (options?.keepEmpty ?? []).map(coordKey).filter((key) => pathKeys.has(key)),
+  );
+  const shuffled = shuffleInPlace(
+    uniquePath.filter((coord) => !keepEmptyKeys.has(coordKey(coord))),
+    rng,
+  );
+  const randomEmptyCount = Math.max(0, emptyCount - keepEmptyKeys.size);
+  const emptyKeys = new Set([...keepEmptyKeys, ...shuffled.slice(0, randomEmptyCount).map(coordKey)]);
 
   for (const coord of uniquePath) {
     if (emptyKeys.has(coordKey(coord))) {
@@ -202,4 +284,145 @@ function uniqueCoords(coords: Coord[]): Coord[] {
 function pickLetter(theme: Theme, rng: Rng): string {
   const alphabet = theme.language === 'ru' ? RUSSIAN_LETTERS : ENGLISH_LETTERS;
   return alphabet[rng.int(alphabet.length)]!;
+}
+
+function defaultGuaranteedWordCount(activeCellCount: number): number {
+  return Math.max(5, Math.min(14, Math.floor(activeCellCount / 70)));
+}
+
+function routeCandidateWords(theme: Theme, maxWordLength: number, rng: Rng): string[] {
+  const byNormalized = new Map<string, { normalized: string; expertiseTier: 1 | 2 }>();
+
+  for (const word of theme.words) {
+    if (
+      word.normalized.length < theme.minWordLength
+      || word.normalized.length > maxWordLength
+      || !/^\p{L}+$/u.test(word.normalized)
+    ) {
+      continue;
+    }
+
+    byNormalized.set(word.normalized, {
+      normalized: word.normalized,
+      expertiseTier: word.expertiseTier,
+    });
+  }
+
+  const candidates = [...byNormalized.values()].sort((left, right) => (
+    left.expertiseTier - right.expertiseTier
+    || left.normalized.length - right.normalized.length
+    || left.normalized.localeCompare(right.normalized)
+  ));
+
+  const casual = candidates.filter((candidate) => candidate.expertiseTier === 1);
+  const expert = candidates.filter((candidate) => candidate.expertiseTier !== 1);
+  return [
+    ...shuffleInPlace(casual, rng),
+    ...shuffleInPlace(expert, rng),
+  ].map((candidate) => candidate.normalized);
+}
+
+function createWordRoute(
+  board: Board,
+  word: string,
+  input: {
+    maxHopDistance: number;
+    reserved: Set<string>;
+    rng: Rng;
+  },
+): { start: Coord; steps: RouteStep[] } | undefined {
+  const starts = shuffleInPlace(
+    activeCoords(board).filter((coord) => !input.reserved.has(coordKey(coord))),
+    input.rng,
+  );
+  const letters = Array.from(word);
+
+  for (const start of starts.slice(0, 96)) {
+    for (let attempt = 0; attempt < 18; attempt += 1) {
+      const path = createRoutePath(board, start, letters.length, input);
+      if (path) {
+        return {
+          start,
+          steps: path.map((coord, index) => ({ coord, char: letters[index]! })),
+        };
+      }
+    }
+  }
+
+  return undefined;
+}
+
+// Guaranteed routes are chains of direct letter-to-letter jumps: each next
+// letter is reachable from the previous one in a single move, so a player
+// never has to plan turns through intermediate empty cells. Relay routes via
+// empty waypoints can still emerge naturally, but are never required.
+function createRoutePath(
+  board: Board,
+  start: Coord,
+  length: number,
+  input: {
+    maxHopDistance: number;
+    reserved: Set<string>;
+    rng: Rng;
+  },
+): Coord[] | undefined {
+  const path: Coord[] = [];
+  const used = new Set<string>([coordKey(start)]);
+  let current = start;
+
+  for (let index = 0; index < length; index += 1) {
+    const targets = routeTargetsFrom(board, current, {
+      maxHopDistance: input.maxHopDistance,
+      reserved: input.reserved,
+      used,
+    });
+
+    if (targets.length === 0) {
+      return undefined;
+    }
+
+    const target = targets[input.rng.int(targets.length)]!;
+    path.push(target);
+    used.add(coordKey(target));
+    current = target;
+  }
+
+  return path;
+}
+
+type RouteStep = { coord: Coord; char: string };
+
+function routeTargetsFrom(
+  board: Board,
+  from: Coord,
+  input: {
+    maxHopDistance: number;
+    reserved: Set<string>;
+    used: Set<string>;
+  },
+): Coord[] {
+  const targets: Coord[] = [];
+  const add = (coord: Coord): void => {
+    const key = coordKey(coord);
+    if (
+      !inBounds(board, coord)
+      || input.reserved.has(key)
+      || input.used.has(key)
+      || getCell(board, coord)?.kind === 'blocked'
+      || hasBlockedCellBetween(board, from, coord)
+    ) {
+      return;
+    }
+
+    targets.push(coord);
+  };
+
+  for (let distance = 1; distance <= input.maxHopDistance; distance += 1) {
+    add({ row: from.row - distance, col: from.col });
+    add({ row: from.row + distance, col: from.col });
+    add({ row: from.row, col: from.col - distance });
+    add({ row: from.row, col: from.col + distance });
+  }
+
+  return targets;
 }

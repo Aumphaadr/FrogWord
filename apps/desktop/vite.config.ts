@@ -2,7 +2,10 @@ import { fileURLToPath, URL } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
+const isPagesBuild = process.env.VITE_FROGWORD_TARGET === 'pages';
+
 export default defineConfig({
+  base: './',
   plugins: [react()],
   clearScreen: false,
   envPrefix: ['VITE_', 'TAURI_'],
@@ -12,7 +15,8 @@ export default defineConfig({
     strictPort: true,
   },
   build: {
-    outDir: 'dist',
+    outDir: isPagesBuild ? '../../docs' : 'dist',
+    emptyOutDir: true,
     target: 'es2022',
   },
   resolve: {

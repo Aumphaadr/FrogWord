@@ -164,6 +164,31 @@ describe('round engine', () => {
     expect(refilledCells.filter((cell) => cell.kind === 'empty')).toHaveLength(1);
   });
 
+  it('keeps the player on the last collected letter cell after accepting a word', () => {
+    const state = createRound({
+      id: 'stay-put',
+      theme: createTheme({
+        id: 'short-words',
+        language: 'ru',
+        title: 'Short Words',
+        minWordLength: 2,
+        words: [{ canonical: 'ри' }],
+      }),
+      boardTemplate: createRectTemplate(3, 1),
+      board: createBoardFromRows(['.ри']),
+      seed: 'stay-put',
+    });
+    activateAt(state, player, { row: 0, col: 0 }, '');
+
+    const result = apply(state, player, '!п1 п1');
+    const playerState = result.state.players[playerIdFromIdentity(player)]!;
+
+    expect(result.state.foundWords).toHaveLength(1);
+    expect(playerState.position).toEqual({ row: 0, col: 2 });
+    expect(result.state.board.cells[0]![2]!.kind).toBe('empty');
+    expect(result.state.board.cells[0]![1]!.kind).toBe('letter');
+  });
+
   it('lets a player quit without losing their score', () => {
     const state = createScoringRound();
     activateAt(state, player, { row: 0, col: 0 }, 'протазан');
@@ -212,8 +237,8 @@ function createScoringRound(): RoundState {
         { canonical: 'протазан', expertiseTier: 2 },
       ],
     }),
-    boardTemplate: createRectTemplate(1, 1),
-    board: createBoardFromRows(['.']),
+    boardTemplate: createRectTemplate(2, 1),
+    board: createBoardFromRows(['..']),
     seed: 'scoring',
   });
 }

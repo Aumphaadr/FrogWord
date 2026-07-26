@@ -25,6 +25,8 @@ FrogWord is playable in local development:
 - Twitch chat reading supports reconnect/backoff and persisted OAuth sessions;
 - round snapshots are persisted locally and the app asks whether to continue or
   start fresh on launch.
+- a static GitHub Pages build can run an online anonymous-read chat mode without
+  streamer OAuth.
 
 This is still an alpha project. In particular, packaged builds and production
 secret storage are not final yet.
@@ -101,6 +103,12 @@ Run the native Tauri desktop app:
 npm run tauri:dev
 ```
 
+Build the GitHub Pages online game into `docs/`:
+
+```bash
+npm run build:pages
+```
+
 Run checks:
 
 ```bash
@@ -140,6 +148,10 @@ The desktop app also has an explicit import UI: choose a JSON file, preview it,
 then import it into local SQLite storage. Imported themes appear in the host
 theme picker alongside built-in starter themes.
 
+The first web build uses a checked-in static copy at
+`apps/desktop/public/theme-bank/main.json`, copied into `docs/theme-bank/` by
+the pages build.
+
 ## Architecture Notes
 
 The core package does not know about React, Tauri, Twitch or SQLite. It accepts
@@ -155,11 +167,11 @@ host controls and the public Game View bridge.
 
 ## Roadmap Pointers
 
-The tracked backlog is in [`BACKLOG.md`](BACKLOG.md). The nearest planned slice
+The tracked backlog is in [`BACKLOG.md`](BACKLOG.md). The nearest desktop slice
 is Twitch chat sender responses: short, rate-limited bot messages for joins,
 accepted words and rejected commands/words.
 
-The project is expected to host a small GitHub Pages site from `docs/` later at:
+The project hosts its static online game from `docs/` at:
 
 ```text
 https://aumphaadr.github.io/FrogWord/
