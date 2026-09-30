@@ -5,7 +5,10 @@ target/
 .turbo/
 .vite/
 *.log
-*.md
+BACKLOG.md
+DEVELOPMENT.md
+.agents/
+.codex/
 spec/
 misc/
 offtop/

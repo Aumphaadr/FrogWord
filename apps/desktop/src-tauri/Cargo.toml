@@ -3,6 +3,9 @@ name = "frogword_desktop"
 version = "0.1.0"
 description = "FrogWord desktop shell"
 authors = ["FrogWord"]
+license = "MIT"
+repository = "https://github.com/Aumphaadr/FrogWord"
+homepage = "https://aumphaadr.github.io/FrogWord/"
 edition = "2021"
 rust-version = "1.77"
 

@@ -59,8 +59,9 @@ apps/desktop/       Tauri 2 + React desktop app and host/game-view UI
 packages/core/      Pure gameplay domain: board, commands, scoring, projections
 packages/storage/   SQLite schema, migrations and repositories behind SqlDatabase
 scripts/            Project maintenance and import-preview utilities
-DEVELOPMENT.md      Native Tauri prerequisites for Ubuntu development
-BACKLOG.md          Live tracked backlog and decisions
+tools/              Guards and generators: npm run check, icons, frogs, licenses
+third-party/        Generated list of Rust crates linked into the desktop app
+docs/               Built web version for GitHub Pages (npm run build:pages)
 spec/               Local design drafts, ignored by git
 misc/               User-owned content scratch space, ignored by git
 ```
@@ -79,9 +80,8 @@ For the web renderer and tests:
 For the native Tauri app:
 
 - Rust/Cargo;
-- WebKitGTK and the other Linux packages listed in `DEVELOPMENT.md`.
-
-Ubuntu setup notes live in [`DEVELOPMENT.md`](DEVELOPMENT.md).
+- WebKitGTK and the other system packages from the
+  [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ## Getting Started
 
@@ -115,7 +115,14 @@ Run checks:
 npm run typecheck
 npm test
 npm run build
+npm run check
 ```
+
+`npm run check` runs the project guards: no external downloads (fonts and icons
+are files in this repository, never CDN or GitHub links), icons and frogs match
+their sources, license files sit next to third-party files, and every library
+shipped to users has a license from the allow list. Details are in
+[`CONTRIBUTING.md`](CONTRIBUTING.md) (in Russian).
 
 ## Twitch Setup
 
@@ -167,12 +174,21 @@ host controls and the public Game View bridge.
 
 ## Roadmap Pointers
 
-The tracked backlog is in [`BACKLOG.md`](BACKLOG.md). The nearest desktop slice
-is Twitch chat sender responses: short, rate-limited bot messages for joins,
-accepted words and rejected commands/words.
+The nearest desktop slice is Twitch chat sender responses: short, rate-limited
+bot messages for joins, accepted words and rejected commands/words.
 
 The project hosts its static online game from `docs/` at:
 
 ```text
 https://aumphaadr.github.io/FrogWord/
 ```
+
+## License
+
+FrogWord is released under the [MIT License](LICENSE); an unofficial Russian
+translation is in [`LICENSE_RU.md`](LICENSE_RU.md). Third-party parts keep their
+own terms: the Cygre font (its author's EULA, next to the font files), the
+mascot frog from Noto Emoji (Apache License 2.0), icons from Klaarheid Icons
+(MIT-0) and the shipped libraries. See
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) for the full list and
+[`CHANGELOG.md`](CHANGELOG.md) for changes.

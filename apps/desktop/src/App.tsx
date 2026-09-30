@@ -1,28 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type RefObject, type SetStateAction } from 'react';
 import {
-  AlertTriangle,
-  Ban,
-  BookOpen,
-  Check,
-  Copy,
-  Crown,
-  Flag,
-  FileUp,
-  HardDriveDownload,
-  KeyRound,
-  LogIn,
-  MessageSquare,
-  Radio,
-  RefreshCcw,
-  RotateCcw,
-  Send,
-  ShieldAlert,
-  Trophy,
-  UserMinus,
-  Unplug,
-  X,
-} from 'lucide-react';
-import {
   applyCommand,
   applyHostAction,
   approveRejectedSubmission,
@@ -52,6 +29,8 @@ import {
   subscribeRendererSnapshotRequests,
   subscribeRendererSnapshots,
 } from './stateBridge';
+import { Icon, type IconName } from './Icon.js';
+import { FrogMascot } from './mascot/FrogMascot.js';
 import {
   createLocalRoundService,
   LOCAL_ROUND_ID,
@@ -181,13 +160,13 @@ const demoPlayers: PlayerIdentity[] = [
   },
 ];
 
-const quickCommands = [
-  { label: 'Join', command: '!играть', icon: LogIn },
-  { label: 'Right', command: '!п1', icon: Flag },
-  { label: 'Left', command: '!л1', icon: Flag },
-  { label: 'Down', command: '!н1', icon: Flag },
-  { label: 'Word', command: '!слово', icon: Check },
-  { label: 'Reset', command: '!сброс', icon: RotateCcw },
+const quickCommands: Array<{ label: string; command: string; icon: IconName }> = [
+  { label: 'Join', command: '!играть', icon: 'log-in' },
+  { label: 'Right', command: '!п1', icon: 'flag' },
+  { label: 'Left', command: '!л1', icon: 'flag' },
+  { label: 'Down', command: '!н1', icon: 'flag' },
+  { label: 'Word', command: '!слово', icon: 'check' },
+  { label: 'Reset', command: '!сброс', icon: 'rotate-ccw' },
 ];
 
 interface ChatEntry {
@@ -1316,7 +1295,7 @@ function HostControlApp() {
       <aside className="control-panel" aria-label="Host controls">
         <section className="panel control-section">
           <div className="panel-title">
-            <BookOpen size={17} />
+            <Icon name="book-open" size={17} />
             <h2>Theme</h2>
           </div>
           <div className="theme-control-row">
@@ -1337,7 +1316,7 @@ function HostControlApp() {
               ))}
             </select>
             <button className="primary-button" type="button" onClick={resetRound}>
-              <RefreshCcw size={17} />
+              <Icon name="refresh" size={17} />
               New
             </button>
           </div>
@@ -1410,7 +1389,7 @@ function HostControlApp() {
 
         <section className="panel control-section">
           <div className="panel-title">
-            <HardDriveDownload size={17} />
+            <Icon name="database" size={17} />
             <h2>Theme bank</h2>
           </div>
           <div className="theme-bank-actions">
@@ -1430,7 +1409,7 @@ function HostControlApp() {
               type="button"
               onClick={() => themeBankInputRef.current?.click()}
             >
-              <FileUp size={17} />
+              <Icon name="file-json" size={17} />
               Choose
             </button>
             <button
@@ -1439,7 +1418,7 @@ function HostControlApp() {
               type="button"
               onClick={importSelectedThemeBank}
             >
-              <HardDriveDownload size={17} />
+              <Icon name="download" size={17} />
               {themeBankImportState.status === 'importing' ? 'Importing' : 'Import'}
             </button>
           </div>
@@ -1465,7 +1444,7 @@ function HostControlApp() {
 
         <section className="panel control-section">
           <div className="panel-title">
-            <MessageSquare size={17} />
+            <Icon name="message" size={17} />
             <h2>Fake chat</h2>
           </div>
           <div className="player-select">
@@ -1499,15 +1478,15 @@ function HostControlApp() {
               placeholder="!играть"
             />
             <button className="primary-button" type="submit">
-              <Send size={17} />
+              <Icon name="send" size={17} />
               Send
             </button>
           </form>
 
           <div className="quick-command-grid">
-            {quickCommands.map(({ command, icon: Icon, label }) => (
+            {quickCommands.map(({ command, icon, label }) => (
               <button key={command} type="button" title={label} onClick={() => sendFakeChat(command)}>
-                <Icon size={16} />
+                <Icon name={icon} size={16} />
                 {command}
               </button>
             ))}
@@ -1522,7 +1501,7 @@ function HostControlApp() {
 
         <section className="panel control-section">
           <div className="panel-title">
-            <ShieldAlert size={17} />
+            <Icon name="shield" size={17} />
             <h2>Players</h2>
           </div>
           <div className="admin-player-list">
@@ -1578,7 +1557,7 @@ function HostControlApp() {
                           disabled={!canSelect}
                           onClick={() => setSelectedPlayerId(row.playerId)}
                         >
-                          <LogIn size={15} />
+                          <Icon name="log-in" size={15} />
                         </button>
                         <button
                           type="button"
@@ -1587,7 +1566,7 @@ function HostControlApp() {
                           disabled={!canKick}
                           onClick={() => kickPlayer(row.playerId)}
                         >
-                          <UserMinus size={15} />
+                          <Icon name="user-minus" size={15} />
                         </button>
                         <button
                           type="button"
@@ -1596,11 +1575,11 @@ function HostControlApp() {
                           disabled={!canBan}
                           onClick={() => banPlayer(row.playerId)}
                         >
-                          <Ban size={15} />
+                          <Icon name="ban" size={15} />
                         </button>
                         {canUnban ? (
                           <button type="button" title="Unban" aria-label="Unban" onClick={() => unbanPlayer(row.playerId)}>
-                            <Check size={15} />
+                            <Icon name="check" size={15} />
                           </button>
                         ) : null}
                       </div>
@@ -1634,7 +1613,7 @@ function HostControlApp() {
 
                     <div className="row-actions">
                       <button type="button" title="Unban" aria-label="Unban" onClick={() => unbanPlayer(player.playerId)}>
-                        <Check size={15} />
+                        <Icon name="check" size={15} />
                       </button>
                     </div>
                   </div>
@@ -1646,7 +1625,7 @@ function HostControlApp() {
 
         <section className="panel control-section">
           <div className="panel-title">
-            <Flag size={17} />
+            <Icon name="flag" size={17} />
             <h2>Pending words</h2>
           </div>
           <div className="pending-list">
@@ -1660,11 +1639,11 @@ function HostControlApp() {
                 </div>
                 <div className="row-actions">
                   <button type="button" title="Approve common" onClick={() => approvePending(submission.id, 1)}>
-                    <Check size={15} />
+                    <Icon name="check" size={15} />
                     T1
                   </button>
                   <button type="button" title="Approve exotic" onClick={() => approvePending(submission.id, 2)}>
-                    <Check size={15} />
+                    <Icon name="check" size={15} />
                     T2
                   </button>
                 </div>
@@ -1682,7 +1661,7 @@ function HostControlApp() {
 
         <section className="panel chat-history-panel">
           <div className="panel-title">
-            <MessageSquare size={17} />
+            <Icon name="message" size={17} />
             <h2>Chat log</h2>
           </div>
           <div className="chat-history">
@@ -2449,7 +2428,7 @@ function WebHome({ language, text, themeLoadState, onLanguageChange, onStart }: 
         <p className="web-home-copy">{text.homeText}</p>
         <div className="web-home-actions">
           <button className="web-primary-button web-launch-button" type="button" disabled={!canStart} onClick={onStart}>
-            <Radio size={20} />
+            <Icon name="radio" size={20} />
             {canStart ? text.startRound : text.loadingThemes}
           </button>
           <span>
@@ -2508,7 +2487,7 @@ function WebSetupModal({ draft, text, themeLoadState, themes, onChange, onClose,
             <h2>{text.appTitle}</h2>
           </div>
           <button className="web-icon-button" type="button" title={text.close} onClick={onClose}>
-            <X size={18} />
+            <Icon name="x" size={18} />
           </button>
         </header>
 
@@ -2612,7 +2591,7 @@ function WebSetupModal({ draft, text, themeLoadState, themes, onChange, onClose,
         <div className="web-modal-bottom">
           <WebLanguageMenu language={safeDraft.language} text={text} onChange={(language) => onChange((current) => ({ ...current, language }))} />
           <button className="web-primary-button" type="submit" disabled={themeLoadState.status !== 'ready'}>
-            <Radio size={18} />
+            <Icon name="radio" size={18} />
             {text.launch}
           </button>
         </div>
@@ -2685,10 +2664,10 @@ function WebGameView({
             <small>{text.boardSize(projection.board.width, projection.board.height)}</small>
           </button>
           <button className="web-icon-button" type="button" title={text.openPanel} onClick={onSidebarToggle}>
-            <MessageSquare size={18} />
+            <Icon name="message" size={18} />
           </button>
           <button className="web-icon-button" type="button" title={text.blocklist} onClick={onOpenBlocklist}>
-            <Ban size={18} />
+            <Icon name="ban" size={18} />
           </button>
           <button className="web-text-button" type="button" onClick={onOpenHowToPlay}>
             {text.howToPlay}
@@ -2702,10 +2681,10 @@ function WebGameView({
             {webChatStatusCopy(chatState, text)}
           </span>
           <button className="web-icon-button" type="button" title={text.newGame} onClick={onOpenSetup}>
-            <RefreshCcw size={18} />
+            <Icon name="refresh" size={18} />
           </button>
           <button className="web-icon-button" type="button" disabled={!isConnected} title={text.disconnect} onClick={onDisconnect}>
-            <Unplug size={18} />
+            <Icon name="radio-off" size={18} />
           </button>
           <WebLanguageMenu language={language} text={text} onChange={onLanguageChange} />
         </div>
@@ -2781,19 +2760,7 @@ function PlayerFrogMarker({
       style={frogMarkerStyle(marker.markerColor, coord, stackIndex)}
       title={marker.displayName}
     >
-      <svg viewBox="0 0 128 128" aria-hidden="true" focusable="false">
-        <path
-          d="M14.16 48.37c-.43 4.5-10 10.84-9.57 26.89s13.09 44.06 57.72 44.77c44.63.7 60.96-27.31 61.1-46.6c.13-17.88-8.58-21.43-9.57-26.04c-.84-3.94 6.76-21.96-10.28-28.44c-20.11-7.65-27.6 11.68-28.16 12.1c-.56.42-6.05.7-10.84.7s-10 0-10.56-.56c-.56-.56-12.81-19.99-30.55-11.83c-16.64 7.67-9.01 26.05-9.29 29.01z"
-          fill="currentColor"
-        />
-        <path d="M103.08 42.36c0 5.29-3 9.76-8.02 9.57c-4.33-.16-7.84-4.29-7.84-9.57s3.51-9.49 7.84-9.57c5.11-.1 8.02 4.28 8.02 9.57z" fill="#2f2f2f" />
-        <path d="M41.89 41.61c.28 6.76-3 10.14-8.02 10.04c-4.22-.08-7.56-3.19-7.65-9.67c-.08-5.34 1.97-9.48 7.65-9.67c4.22-.13 7.8 3.97 8.02 9.3z" fill="#2f2f2f" />
-        <path d="M53.29 63.5c-.81 1.79-3.06 2.35-4.57 1.48c-1.5-.87-1.91-3.23-.93-4.93c.98-1.7 2.65-1.96 3.87-1.48c1.63.64 2.83 2.28 1.63 4.93z" fill="#2f2f2f" />
-        <path d="M80.33 60.55c.77 1.86-.16 4.04-1.94 4.57c-1.78.53-3.69-.61-4.26-2.54c-.57-1.93.14-3.61 1.87-4.3c1.13-.44 3.19-.48 4.33 2.27z" fill="#2f2f2f" />
-        <path d="M27.44 78.31l.38 2.72s10.51 10.98 35.85 11.36c26 .39 37.26-12.29 37.26-12.29l-11.64-5.63s-11.07 4.69-25.34 4.41c-14.27-.28-28.34-4.41-28.34-4.41l-8.17 3.84z" fill="#ff6011" />
-        <path d="M104.59 71.92c-3.28-4.79-7.23-.43-13.42 1.88c-3.43 1.28-5.7 2.02-5.7 2.02s5.09.99 7.34 2.21s6.17 3.89 6.17 3.89s8.37-5.96 5.61-10z" fill="#865b51" />
-        <path d="M24.81 71.36c-3.94 2.63 3.02 9.68 3.02 9.68s2.15-1.98 5.06-3.2s7.78-2.1 7.78-2.1s-5.63-1.27-8.9-3.16c-1.69-.96-4.71-2.72-6.96-1.22z" fill="#865b51" />
-      </svg>
+      <FrogMascot />
       <span>{label}</span>
     </div>
   );
@@ -2821,7 +2788,7 @@ function WebRoundRoster({
   return (
     <aside className="web-round-roster" aria-label={text.leaderboard}>
       <header>
-        <Trophy size={16} />
+        <Icon name="award" size={16} />
         <strong>{text.leaderboard}</strong>
       </header>
 
@@ -2852,7 +2819,7 @@ function WebRoundRoster({
                   title={text.kickPlayer}
                   onClick={() => onModeratePlayer('kickPlayer', row.playerId)}
                 >
-                  <UserMinus size={13} />
+                  <Icon name="user-minus" size={13} />
                 </button>
                 <button
                   type="button"
@@ -2860,7 +2827,7 @@ function WebRoundRoster({
                   title={text.banPlayer}
                   onClick={() => onModeratePlayer('banPlayer', row.playerId)}
                 >
-                  <Ban size={13} />
+                  <Icon name="ban" size={13} />
                 </button>
               </div>
             </article>
@@ -2900,7 +2867,7 @@ function WebGameSidebar({ blockedPlayers, entries, isOpen, language, projection,
       <header>
         <strong>{text.openPanel}</strong>
         <button className="web-icon-button" type="button" title={text.close} onClick={onClose}>
-          <X size={18} />
+          <Icon name="x" size={18} />
         </button>
       </header>
 
@@ -2997,7 +2964,7 @@ function WebBlocklistModal({
             <h2>{text.blockedPlayers}</h2>
           </div>
           <button className="web-icon-button" type="button" title={text.close} onClick={onClose}>
-            <X size={18} />
+            <Icon name="x" size={18} />
           </button>
         </header>
 
@@ -3032,7 +2999,7 @@ function WebHowToPlayModal({ text, onClose }: { text: WebTexts; onClose: () => v
             <h2>{text.howToPlayTitle}</h2>
           </div>
           <button className="web-icon-button" type="button" title={text.close} onClick={onClose}>
-            <X size={18} />
+            <Icon name="x" size={18} />
           </button>
         </header>
 
@@ -3077,12 +3044,7 @@ function WebMiniBoardDemo({ word, variant }: { word: 'комар' | 'муха'; 
           </span>
         ))}
         <i className={`web-mini-frog web-mini-frog-${word}`}>
-          <svg viewBox="0 0 128 128" aria-hidden="true" focusable="false">
-            <path d="M14.16 48.37c-.43 4.5-10 10.84-9.57 26.89s13.09 44.06 57.72 44.77c44.63.7 60.96-27.31 61.1-46.6c.13-17.88-8.58-21.43-9.57-26.04c-.84-3.94 6.76-21.96-10.28-28.44c-20.11-7.65-27.6 11.68-28.16 12.1c-.56.42-6.05.7-10.84.7s-10 0-10.56-.56c-.56-.56-12.81-19.99-30.55-11.83c-16.64 7.67-9.01 26.05-9.29 29.01z" fill="currentColor" />
-            <path d="M103.08 42.36c0 5.29-3 9.76-8.02 9.57c-4.33-.16-7.84-4.29-7.84-9.57s3.51-9.49 7.84-9.57c5.11-.1 8.02 4.28 8.02 9.57z" fill="#2f2f2f" />
-            <path d="M41.89 41.61c.28 6.76-3 10.14-8.02 10.04c-4.22-.08-7.56-3.19-7.65-9.67c-.08-5.34 1.97-9.48 7.65-9.67c4.22-.13 7.8 3.97 8.02 9.3z" fill="#2f2f2f" />
-            <path d="M27.44 78.31l.38 2.72s10.51 10.98 35.85 11.36c26 .39 37.26-12.29 37.26-12.29l-11.64-5.63s-11.07 4.69-25.34 4.41c-14.27-.28-28.34-4.41-28.34-4.41l-8.17 3.84z" fill="#ff6011" />
-          </svg>
+          <FrogMascot detail="simple" />
         </i>
       </div>
       {collectedLetters.length > 0 ? (
@@ -3186,7 +3148,7 @@ function WebNoticeToast({ notice, onDismiss }: { notice: WebNotice; onDismiss: (
     <div className={`web-notice web-notice-${notice.kind}`} role={notice.kind === 'error' ? 'alert' : 'status'}>
       <span>{notice.message}</span>
       <button className="web-icon-button" type="button" title="Dismiss" onClick={onDismiss}>
-        <X size={16} />
+        <Icon name="x" size={16} />
       </button>
     </div>
   );
@@ -3217,7 +3179,7 @@ function PublicGameView({ round, notifications = [], mode, onReset, eyebrow }: P
           <div className="status-pill">{publicProjection.roundStatus}</div>
           {onReset ? (
             <button className="icon-button" type="button" title="New local round" onClick={onReset}>
-              <RefreshCcw size={18} />
+              <Icon name="refresh" size={18} />
             </button>
           ) : null}
         </div>
@@ -3261,7 +3223,7 @@ function PublicGameView({ round, notifications = [], mode, onReset, eyebrow }: P
         <aside className="score-column" aria-label="Public score panel">
           <section className="panel">
             <div className="panel-title">
-              <Trophy size={17} />
+              <Icon name="award" size={17} />
               <h2>Leaderboard</h2>
             </div>
             <div className="leaderboard-list">
@@ -3277,7 +3239,7 @@ function PublicGameView({ round, notifications = [], mode, onReset, eyebrow }: P
 
           <section className="panel">
             <div className="panel-title">
-              <MessageSquare size={17} />
+              <Icon name="message" size={17} />
               <h2>Players</h2>
             </div>
             <div className="participant-list">
@@ -3286,7 +3248,7 @@ function PublicGameView({ round, notifications = [], mode, onReset, eyebrow }: P
                   <div className="participant-main">
                     <span className="marker-dot" style={markerStyle(row.markerColor)} />
                     <span>{row.displayName}</span>
-                    {row.flags.includes('deadEnd') ? <ShieldAlert className="flag-icon" size={15} /> : null}
+                    {row.flags.includes('deadEnd') ? <Icon name="octagon-alert" className="flag-icon" size={15} /> : null}
                   </div>
                   <div className="buffer">{row.buffer || '...'}</div>
                 </div>
@@ -3296,7 +3258,7 @@ function PublicGameView({ round, notifications = [], mode, onReset, eyebrow }: P
 
           <section className="panel">
             <div className="panel-title">
-              <Crown size={17} />
+              <Icon name="crown" size={17} />
               <h2>Found</h2>
             </div>
             <div className="found-list">
@@ -3327,7 +3289,7 @@ function NotificationPanel({ notifications, onClear, onDismiss }: NotificationPa
     <section className="panel control-section notification-panel" aria-label="Notifications">
       <div className="panel-title panel-title-spread">
         <div className="panel-title-main">
-          <AlertTriangle size={17} />
+          <Icon name="triangle-alert" size={17} />
           <h2>Notifications</h2>
         </div>
         <button
@@ -3338,7 +3300,7 @@ function NotificationPanel({ notifications, onClear, onDismiss }: NotificationPa
           disabled={notifications.length === 0}
           onClick={onClear}
         >
-          <X size={15} />
+          <Icon name="x" size={15} />
         </button>
       </div>
 
@@ -3363,7 +3325,7 @@ function NotificationPanel({ notifications, onClear, onDismiss }: NotificationPa
               aria-label="Dismiss"
               onClick={() => onDismiss(notification.id)}
             >
-              <X size={14} />
+              <Icon name="x" size={14} />
             </button>
           </article>
         ))}
@@ -3398,7 +3360,7 @@ function StartupRoundChoiceOverlay({ state, onContinue, onNew }: StartupRoundCho
     <div className="startup-choice-overlay" role="dialog" aria-modal="true" aria-label="Startup round choice">
       <section className="startup-choice-card">
         <div className="panel-title">
-          <RotateCcw size={17} />
+          <Icon name="rotate-ccw" size={17} />
           <h2>Saved round</h2>
         </div>
 
@@ -3421,7 +3383,7 @@ function StartupRoundChoiceOverlay({ state, onContinue, onNew }: StartupRoundCho
             type="button"
             onClick={() => onNew(hydration)}
           >
-            <RefreshCcw size={16} />
+            <Icon name="refresh" size={16} />
             New round
           </button>
           <button
@@ -3430,7 +3392,7 @@ function StartupRoundChoiceOverlay({ state, onContinue, onNew }: StartupRoundCho
             type="button"
             onClick={() => onContinue(hydration)}
           >
-            <Check size={16} />
+            <Icon name="check" size={16} />
             Continue
           </button>
         </div>
@@ -3451,7 +3413,7 @@ function TwitchAuthPanel({ clientId, states, onCheck, onClientIdChange, onStart 
   return (
     <section className="panel control-section twitch-auth-panel" aria-label="Twitch authorization">
       <div className="panel-title">
-        <KeyRound size={17} />
+        <Icon name="key" size={17} />
         <h2>Twitch auth</h2>
       </div>
 
@@ -3534,7 +3496,7 @@ function TwitchAuthRoleCard({ clientId, definition, state, onCheck, onStart }: T
           type="button"
           onClick={onStart}
         >
-          <Copy size={16} />
+          <Icon name="copy" size={16} />
           {state.status === 'requesting' ? 'Starting' : 'Start'}
         </button>
         <button
@@ -3543,7 +3505,7 @@ function TwitchAuthRoleCard({ clientId, definition, state, onCheck, onStart }: T
           type="button"
           onClick={onCheck}
         >
-          <Check size={16} />
+          <Icon name="check" size={16} />
           {state.status === 'checking' ? 'Checking' : 'Check'}
         </button>
       </div>
@@ -3591,7 +3553,7 @@ function TwitchChatPanel({
     <section className="panel control-section twitch-chat-panel" aria-label="Twitch chat">
       <div className="panel-title panel-title-spread">
         <div className="panel-title-main">
-          <Radio size={17} />
+          <Icon name="radio" size={17} />
           <h2>Twitch chat</h2>
         </div>
         <span className={`twitch-chat-status twitch-chat-status-${state.status}`}>
@@ -3622,7 +3584,7 @@ function TwitchChatPanel({
           type="button"
           onClick={onConnect}
         >
-          <Radio size={16} />
+          <Icon name="radio" size={16} />
           {state.status === 'connecting' ? 'Connecting' : 'Reconnect'}
         </button>
         <button
@@ -3631,7 +3593,7 @@ function TwitchChatPanel({
           type="button"
           onClick={onDisconnect}
         >
-          <Unplug size={16} />
+          <Icon name="radio-off" size={16} />
           Disconnect
         </button>
       </div>
@@ -3729,7 +3691,7 @@ function AuditLogPanel({ entries, filter, onClear, onFilterChange }: AuditLogPan
     <section className="panel audit-panel" aria-label="Audit log">
       <div className="panel-title panel-title-spread">
         <div className="panel-title-main">
-          <MessageSquare size={17} />
+          <Icon name="message" size={17} />
           <h2>Audit log</h2>
         </div>
         <button
@@ -3740,7 +3702,7 @@ function AuditLogPanel({ entries, filter, onClear, onFilterChange }: AuditLogPan
           disabled={entries.length === 0}
           onClick={onClear}
         >
-          <X size={15} />
+          <Icon name="x" size={15} />
         </button>
       </div>
 
@@ -4539,36 +4501,11 @@ function rgbToHsl(r: number, g: number, b: number): { hue: number; saturation: n
 }
 
 function FrogBackgroundMark() {
-  return (
-    <svg
-      className="web-frog-mark"
-      viewBox="0 0 512 512"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <path
-        d=""
-      />
-      <path
-        d=""
-      />
-    </svg>
-  );
+  return <Icon name="frog-sitting" className="web-frog-mark" />;
 }
 
 function FrogBackgroundMarkAlt() {
-  return (
-    <svg
-      className="web-frog-mark-alt"
-      viewBox="0 0 512 512"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <path
-        d=""
-      />
-    </svg>
-  );
+  return <Icon name="frog-top" className="web-frog-mark-alt" />;
 }
 
 function createRendererSnapshot(round: RoundState, notifications: GameNotification[]): RendererSnapshot {

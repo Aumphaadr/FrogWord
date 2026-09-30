@@ -3,6 +3,20 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "description": "Словесная игра для Twitch-стримов: зрители прыгают по буквам на поле командами из чата и собирают слова выбранной темы",
+  "license": "MIT",
+  "author": "Nathaniel Larsson",
+  "homepage": "https://aumphaadr.github.io/FrogWord/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Aumphaadr/FrogWord.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Aumphaadr/FrogWord/issues"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "workspaces": [
     "packages/*",
     "apps/*"
@@ -14,7 +28,12 @@
     "test": "npm run test --workspaces --if-present",
     "theme-bank:preview": "npm run build --workspace @frogword/core && node scripts/theme-bank-to-starter-pack.mjs",
     "tauri:dev": "npm run tauri:dev --workspace @frogword/desktop",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "check": "node tools/check.mjs",
+    "frogs": "node tools/frogs.mjs",
+    "icons": "node tools/build-icons.mjs",
+    "icons:sync": "node tools/sync-icons.mjs",
+    "licenses": "node tools/licenses.mjs"
   },
   "devDependencies": {
     "typescript": "^5.5.4",

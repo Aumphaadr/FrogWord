@@ -2,6 +2,7 @@
   "name": "@frogword/desktop",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit && vite build",
@@ -20,7 +21,6 @@
     "@frogword/core": "0.1.0",
     "@frogword/storage": "0.1.0",
     "@tauri-apps/api": "^2.11.1",
-    "lucide-react": "^1.23.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },
