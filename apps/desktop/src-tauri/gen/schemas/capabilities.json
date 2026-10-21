@@ -1,0 +1,1 @@
+{"frogword-default":{"identifier":"frogword-default","description":"Allow FrogWord native windows to exchange public renderer snapshots over the Tauri event bus.","local":true,"windows":["main","game-view"],"permissions":["core:event:default"]}}

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "FrogWord",
+  "version": "0.1.0",
+  "identifier": "io.github.aumphaadr.frogword",
+  "build": {
+    "beforeDevCommand": "npm run dev:web",
+    "beforeBuildCommand": "npm run build:web",
+    "devUrl": "http://127.0.0.1:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "FrogWord",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 1080,
+        "minHeight": 720
+      },
+      {
+        "label": "game-view",
+        "title": "FrogWord Game View",
+        "url": "index.html#/game-view",
+        "width": 1280,
+        "height": 720,
+        "minWidth": 960,
+        "minHeight": 540
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all"
+  }
+}

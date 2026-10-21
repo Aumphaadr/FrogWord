@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Типы и тесты
+        run: |
+          npm run typecheck
+          npm test
+      - name: Стражи — внешние адреса, значки, лягушки, лицензии
+        run: npm run check
+      - name: Веб-версия в docs/ совпадает с пересборкой
+        run: |
+          npm run build:pages
+          git status --porcelain -- docs
+          test -z "$(git status --porcelain -- docs)"

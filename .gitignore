@@ -1,0 +1,16 @@
+node_modules/
+dist/
+coverage/
+target/
+.turbo/
+.vite/
+*.log
+BACKLOG.md
+DEVELOPMENT.md
+.agents/
+.codex/
+spec/
+misc/
+offtop/
+*.code-workspace
+!README.md
